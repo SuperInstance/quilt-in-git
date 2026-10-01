@@ -429,6 +429,39 @@ pin_p9() {
   fi
 }
 
+# ------------------------------------------------------------- P10
+# Audit finding 2026-10-02 (decorative-pin audit on w3a): corrupting the
+# FNV prime in .quilt/bin/quilt-fnv1a passed 9/9 pins — write and verify
+# share the implementation, so a self-consistent sig cannot detect algorithm
+# substitution. The reference vectors lived only in RESULT claims, never in
+# a pin. P10 pins the algorithm to the canonical fnv1a-64 constants.
+pin_p10() {
+  local d
+  d=$(new_repo p10)
+  [ -n "$d" ] || { bad "P10-0 setup"; return; }
+  local f="$SRC/.quilt/bin/quilt-fnv1a"
+  local e_out a_out foo_out
+  e_out=$(printf '' | sh "$f") || true
+  a_out=$(printf 'a' | sh "$f") || true
+  foo_out=$(printf 'foobar' | sh "$f") || true
+  if [ "$e_out" = "cbf29ce484222325" ]; then
+    ok "P10a empty-string vector (cbf29ce484222325)"
+  else
+    bad "P10a empty-string vector: got '$e_out'"
+  fi
+  if [ "$a_out" = "af63dc4c8601ec8c" ]; then
+    ok "P10b 'a' vector (af63dc4c8601ec8c)"
+  else
+    bad "P10b 'a' vector: got '$a_out'"
+  fi
+  if [ "$foo_out" = "85944171f73967e8" ]; then
+    ok "P10c 'foobar' vector (85944171f73967e8)"
+  else
+    bad "P10c 'foobar' vector: got '$foo_out'"
+  fi
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- main
 main() {
   say "# quilt-in-git pins  src=$SRC"
@@ -443,9 +476,10 @@ main() {
   pin_p7
   pin_p8
   pin_p9
+  pin_p10
   say ""
   say "# ---- per-pin verdicts ----"
-  local v1 v2 v3 v4 v5 v6 v7 v8 v9 n
+  local v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 n
   case "$FAILS" in *" P1"*) v1=FAIL;; *) v1=PASS;; esac
   case "$FAILS" in *" P2"*) v2=FAIL;; *) v2=PASS;; esac
   case "$FAILS" in *" P3"*) v3=FAIL;; *) v3=PASS;; esac
@@ -455,6 +489,7 @@ main() {
   case "$FAILS" in *" P7"*) v7=FAIL;; *) v7=PASS;; esac
   case "$FAILS" in *" P8"*) v8=FAIL;; *) v8=PASS;; esac
   case "$FAILS" in *" P9"*) v9=FAIL;; *) v9=PASS;; esac
+  case "$FAILS" in *" P10"*) v10=FAIL;; *) v10=PASS;; esac
   say "P1 receipt+watch on dial commit : $v1"
   say "P2 freeze enforcement          : $v2"
   say "P3 cascade                      : $v3"
@@ -464,13 +499,14 @@ main() {
   say "P7 receipt note on tick commit  : $v7"
   say "P8 audit + receipts ride clone  : $v8"
   say "P9 tampered note detected       : $v9"
+  say "P10 sig-canonical (ref vectors) : $v10"
   n=0
-  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6" "$v7" "$v8" "$v9"; do
+  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6" "$v7" "$v8" "$v9" "$v10"; do
     [ "$v" = PASS ] && n=$((n+1))
   done
   say ""
-  say "PINS: $n/9 pins pass ($PASS checks pass, $FAIL checks fail)"
-  if [ "$n" -eq 9 ]; then
+  say "PINS: $n/10 pins pass ($PASS checks pass, $FAIL checks fail)"
+  if [ "$n" -eq 10 ]; then
     say "PINS: ALL PASS"
     rm -rf "$SCRATCH"
     exit 0
