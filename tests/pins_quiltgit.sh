@@ -22,9 +22,11 @@
 #                       watch.log line.
 #   P7  quilt head   -> a dial commit moves refs/quilt/HEAD to that commit;
 #                       a non-cell commit does NOT move it.
-#   P8  head travels -> refs/quilt/HEAD survives clone WITHOUT quilt-init
-#                       (the ref is data; the hook is runtime — P5's law from
-#                       the other side).
+#   P8  head travels -> refs/quilt/HEAD survives an explicit
+#                       '+refs/quilt/*:refs/quilt/*' fetch; a DEFAULT clone
+#                       drops it (non-head namespaces) — the limit is
+#                       pinned as behavior, not hidden (hooks-vs-data law
+#                       from P5, other side).
 #   P9  head honest  -> in a repo with zero ticks, .quilt/bin/quilt-head
 #                       exits non-zero and says why (never fabricates a
 #                       position).
@@ -334,10 +336,20 @@ pin_p8() {
 
   git clone -q "$d" "$SCRATCH/p8clone" 2>/dev/null \
     || { bad "P8c clone failed"; return; }
-  if [ "$(git -C "$SCRATCH/p8clone" rev-parse --verify -q refs/quilt/HEAD)" = "$ref_main" ]; then
-    ok "P8d quilt head travelled with the clone (no quilt-init needed)"
+  # Honest limit (stated in README): a DEFAULT clone fetches only
+  # refs/heads/* + tags — non-head namespaces like refs/quilt/* are
+  # dropped. The pointer travels via explicit refspec or git-bundle.
+  if ! git -C "$SCRATCH/p8clone" rev-parse --verify -q refs/quilt/HEAD >/dev/null; then
+    ok "P8d default clone drops non-head namespaces (limit is real, not hidden)"
   else
-    bad "P8d quilt head lost/absent in fresh clone"
+    bad "P8d default clone unexpectedly kept refs/quilt/HEAD"
+  fi
+  git -C "$SCRATCH/p8clone" fetch -q origin '+refs/quilt/*:refs/quilt/*' 2>/dev/null \
+    || { bad "P8e refspec fetch failed"; return; }
+  if [ "$(git -C "$SCRATCH/p8clone" rev-parse --verify -q refs/quilt/HEAD)" = "$ref_main" ]; then
+    ok "P8f explicit refspec restores the quilt head, byte-equal"
+  else
+    bad "P8f quilt head wrong/absent after refspec fetch"
   fi
 }
 

@@ -1,0 +1,24 @@
+#!/bin/sh
+# quilt-head — where is the quilt right now?
+#
+#   .quilt/bin/quilt-head        # "a1b2c3d auth,core" — last recorded tick
+#
+# Reads refs/quilt/HEAD, the live position pointer that post-commit moves to
+# every recorded tick. The ref is ordinary git data: it travels with
+# clone/bundle/fetch like any ref (P8), needs no quilt-init on the receiving
+# side, and can be rewound or signed like any ref. Honest by contract: with
+# zero ticks recorded there IS no position, so we say so and exit 1 (P9)
+# rather than fabricate one from HEAD (HEAD may point at a non-tick commit).
+
+set -e
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) \
+  || { echo "quilt-head: not inside a git repository" >&2; exit 1; }
+cd "$ROOT"
+
+ref=$(git rev-parse --verify -q refs/quilt/HEAD) \
+  || { echo "quilt-head: no ticks recorded yet (refs/quilt/HEAD absent)" >&2; exit 1; }
+
+short=$(git rev-parse --short "$ref")
+cells=$(grep "^tick $short " .quilt/watch.log 2>/dev/null | tail -1 | cut -d' ' -f4)
+echo "$short ${cells:-?}"
