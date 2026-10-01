@@ -1,0 +1,78 @@
+# quilt-in-git w3c pins  src=/tmp/zlanes2/laneI/wt
+# scratch=/tmp/quilt-pins-w3c-RFccAd  git=2.43.0
+
+PASS P13a quilt-export created a bundle
+PASS P13b source repo destroyed — the bundle is the only copy (air gap)
+PASS P13c far side: git clone from the bundle works
+PASS P13d quilt-import landed (verify + fetch refs + init + regenerate)
+PASS P13e hooks re-armed in the imported clone (core.hooksPath)
+PASS P13f regenerated journal byte-identical to the carried one (status clean)
+PASS P13g watch.log regenerated with all 5 tick lines
+PASS P13h refs/quilt/snap survived the air gap
+PASS P13i fresh tick commits in the imported clone
+PASS P13j P1-style receipt for the fresh tick (full hash + alias)
+PASS P13k watch.log grew by exactly one line (5->6)
+PASS P14a quilt-focus a succeeded
+PASS P14b focused cell materialized (body + dials)
+PASS P14c other cell's body absent from worktree
+PASS P14d other cell's dials absent from worktree
+PASS P14e focused quilt-tick commits (dial1=0.5 in HEAD)
+PASS P14f cascade commit exists (fired under focus)
+PASS P14g other cell's dial 14 present IN THE INDEX (ls-files -s: 14facca6f3c740fdd192104d0ea9b2c8141eb80c)
+PASS P14h index blob carries the cascaded value 0.2500 (cat-file)
+PASS P14i focus held: other cell's body still absent after the cascade
+PASS P15a focused: other cell's body absent
+PASS P15b quilt-focus --off succeeded
+PASS P15c other cell's body restored
+PASS P15d focused cell intact (dial1=0.8)
+PASS P15e other cell's cascaded dial restored (0.4000)
+PASS P15f cells/ clean after --off (no organ lost or altered)
+
+# ---- per-pin verdicts ----
+P13 bundle air-gap round-trip   : PASS
+P14 sparse focus isolates organ : PASS
+P15 focus --off restores body   : PASS
+
+PINS: 3/3 pins pass (26 checks pass, 0 checks fail)
+PINS: ALL PASS
+
+# ---- regression: wave-2 pins (pins_quiltgit.sh) ----
+# quilt-in-git pins  src=/tmp/zlanes2/laneI/wt
+# scratch=/tmp/quilt-pins-qL5C0i  git=2.43.0
+
+PASS P1a dial commit accepted
+PASS P1b receipt exists (.quilt/receipts/71bebce.json)
+PASS P1c receipt contains commit hash
+PASS P1d receipt contains alias a
+PASS P1e watch.log grew by exactly one line (1->2)
+PASS P1f watch line starts with 'tick' (tick 71bebce 71bebce a)
+PASS P2a freeze commit (dial15=0.8) accepted
+PASS P2b next commit touching cell rejected (rc=1)
+PASS P2c error mentions frozen
+PASS P2d dial file unchanged by rejected commit (still 0.7 as written)
+PASS P2e committed dial1 still 0.0
+PASS P2f no new commit was created
+PASS P3a tick a dial1=0.9 committed
+PASS P3b b.dials/14 == 0.4500 (== 0.45)
+PASS P3c 'quilt: cascade after' commit exists
+PASS P4c new dial value 0.99 committed
+PASS P4d rewind (checkout prev -- cells/a/) restores 0.11
+PASS P5c fresh clone: no receipt, no watch line (hooks inert)
+PASS P5e quilt-init set core.hooksPath=.quilt/hooks
+PASS P5g receipt appears after quilt-init (cbed87c.json)
+PASS P5h watch.log grew after quilt-init
+PASS P6b non-cell commit created NO receipt
+PASS P6c non-cell commit added NO watch.log line
+
+# ---- per-pin verdicts ----
+P1 receipt+watch on dial commit : PASS
+P2 freeze enforcement          : PASS
+P3 cascade                      : PASS
+P4 rewind                       : PASS
+P5 clone needs quilt-init       : PASS
+P6 non-cell commit silent       : PASS
+
+PINS: 6/6 pins pass (23 checks pass, 0 checks fail)
+PINS: ALL PASS
+
+# w3c harness rc=0  regression rc=0
