@@ -1,0 +1,84 @@
+#!/bin/sh
+# quilt-publish — snapshot the fleet's dial state into two live-state refs.
+#
+#   refs/quilt/dials : parentless orphan commit whose tree is ONLY the dial
+#                      files (cells/<alias>/dials/*) of HEAD — no bodies, no
+#                      links, no history. An agent reads the whole fleet's
+#                      dials in kilobytes instead of cloning the journal:
+#                        git fetch origin refs/quilt/dials
+#                        .quilt/bin/quilt-read-dials FETCH_HEAD
+#   refs/quilt/HEAD  : parentless orphan commit whose tree = the dials
+#                      snapshot plus .quilt/live/last_receipt (newest
+#                      receipt JSON) and .quilt/live/watch_tail (last 20
+#                      watch lines) — the vital signs at a glance, visible
+#                      via git ls-remote origin 'refs/quilt/*' with no
+#                      clone and no fetch of history.
+#
+# Trees are built from HEAD's committed content (never the working tree),
+# so publishing right after a tick captures exactly what the tick (plus any
+# cascade auto-commit) committed. Both refs are snapshots: every publish
+# writes a fresh parentless commit (git read-tree --empty into a private
+# index, git write-tree, git commit-tree with no parent) and moves the ref —
+# nothing accumulates and stale snapshots leave with gc. Author/committer
+# dates are pinned to HEAD's commit date, so re-publishing the same HEAD is
+# idempotent: same tree, same message, same dates -> same hash.
+#
+# Called by the post-commit hook after every tick; safe to run by hand.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+cd "$ROOT" || exit 1
+
+# Private index: read-tree --empty + update-index build the snapshot trees
+# without ever touching the real index or the working tree.
+GD=$(cd "$(git rev-parse --git-dir)" && pwd) || exit 1
+IDX=$(mktemp "$GD/quilt-publish.XXXXXX") || exit 1
+trap 'rm -f "$IDX"' EXIT INT TERM
+GIT_INDEX_FILE=$IDX
+export GIT_INDEX_FILE
+
+# stage_dials — empty index, then every dial file of HEAD's tree, reusing
+# the committed blobs (new tree objects only, no new blobs).
+stage_dials() {
+  git read-tree --empty
+  git ls-tree -r HEAD -- cells/ | while read -r mode type hash path; do
+    case "$path" in
+      cells/*/dials/*) git update-index --add --cacheinfo "$mode,$hash,$path" ;;
+    esac
+  done
+}
+
+SHORT=$(git rev-parse --short HEAD)
+CTS=$(git log -1 --format=%cI HEAD)
+GIT_AUTHOR_DATE=$CTS GIT_COMMITTER_DATE=$CTS
+export GIT_AUTHOR_DATE GIT_COMMITTER_DATE
+
+# ---- refs/quilt/dials : dials-only orphan snapshot
+stage_dials
+if TREE=$(git write-tree) && C=$(git commit-tree "$TREE" \
+     -m "quilt: dials snapshot after $SHORT"); then
+  git update-ref refs/quilt/dials "$C"
+else
+  echo "quilt-publish: could not commit the dials snapshot" >&2
+  exit 1
+fi
+
+# ---- refs/quilt/HEAD : dials + vitals orphan snapshot
+stage_dials
+last_rec=$(tail -n 1 .quilt/watch.log 2>/dev/null | awk '{print $3}')
+if [ -n "$last_rec" ] && [ -f ".quilt/receipts/$last_rec.json" ]; then
+  B=$(git hash-object -w ".quilt/receipts/$last_rec.json")
+  git update-index --add --cacheinfo "100644,$B,.quilt/live/last_receipt"
+fi
+if [ -f .quilt/watch.log ]; then
+  B=$(tail -n 20 .quilt/watch.log | git hash-object -w --stdin)
+  git update-index --add --cacheinfo "100644,$B,.quilt/live/watch_tail"
+fi
+if TREE=$(git write-tree) && C=$(git commit-tree "$TREE" \
+     -m "quilt: live snapshot after $SHORT"); then
+  git update-ref refs/quilt/HEAD "$C"
+else
+  echo "quilt-publish: could not commit the live snapshot" >&2
+  exit 1
+fi
+
+exit 0

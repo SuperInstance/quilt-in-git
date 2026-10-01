@@ -1,0 +1,32 @@
+#!/bin/sh
+# quilt-read-dials <ref> — print "alias:dial:value" for every dial held in
+# <ref>, with no checkout.
+#
+#   .quilt/bin/quilt-read-dials refs/quilt/dials    # local snapshot
+#   git fetch origin refs/quilt/dials               # kilobytes, no history
+#   .quilt/bin/quilt-read-dials FETCH_HEAD          # the whole fleet
+#
+# Walks the ref's tree with git ls-tree -r and reads each blob with
+# git cat-file — no checkout, no working-tree change, no clone.
+
+[ $# -eq 1 ] || { echo "usage: quilt-read-dials <ref>" >&2; exit 2; }
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) \
+  || { echo "quilt-read-dials: not inside a git repository" >&2; exit 1; }
+cd "$ROOT"
+
+git rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1 \
+  || { echo "quilt-read-dials: cannot resolve '$1' to a commit" >&2; exit 1; }
+
+# ls-tree -r yields path-sorted rows, so the output is deterministic:
+# cells sorted by alias, each alias's dials in string order.
+git ls-tree -r "$1" -- cells/ | while read -r mode type hash path; do
+  case "$path" in
+    cells/*/dials/*)
+      alias=${path#cells/}; alias=${alias%%/*}
+      dial=${path##*/}
+      value=$(git cat-file blob "$hash" | tr -d '[:space:]')
+      printf '%s:%s:%s\n' "$alias" "$dial" "$value"
+      ;;
+  esac
+done

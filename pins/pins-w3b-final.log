@@ -1,0 +1,55 @@
+# quilt-in-git pins  src=/tmp/zlanes2/laneH/wt
+# scratch=/tmp/quilt-pins-FHBgPU  git=2.43.0
+
+PASS P1a dial commit accepted
+PASS P1b receipt exists (.quilt/receipts/e9d6dc6.json)
+PASS P1c receipt contains commit hash
+PASS P1d receipt contains alias a
+PASS P1e watch.log grew by exactly one line (1->2)
+PASS P1f watch line starts with 'tick' (tick e9d6dc6 e9d6dc6 a)
+PASS P2a freeze commit (dial15=0.8) accepted
+PASS P2b next commit touching cell rejected (rc=1)
+PASS P2c error mentions frozen
+PASS P2d dial file unchanged by rejected commit (still 0.7 as written)
+PASS P2e committed dial1 still 0.0
+PASS P2f no new commit was created
+PASS P3a tick a dial1=0.9 committed
+PASS P3b b.dials/14 == 0.4500 (== 0.45)
+PASS P3c 'quilt: cascade after' commit exists
+PASS P4c new dial value 0.99 committed
+PASS P4d rewind (checkout prev -- cells/a/) restores 0.11
+PASS P5c fresh clone: no receipt, no watch line (hooks inert)
+PASS P5e quilt-init set core.hooksPath=.quilt/hooks
+PASS P5g receipt appears after quilt-init (0061646.json)
+PASS P5h watch.log grew after quilt-init
+PASS P6b non-cell commit created NO receipt
+PASS P6c non-cell commit added NO watch.log line
+PASS P10a tick (a dial3=0.37) committed
+PASS P10b refs/quilt/dials exists after tick
+PASS P10c dials ref tree holds ticked value (a.dials/3 == 0.37)
+PASS P10d dials ref commit has NO parent (orphan snapshot)
+PASS P10e quilt-read-dials prints 'a:3:0.37' from the ref (no checkout)
+PASS P11a tick (a dial5=0.5) committed
+PASS P11b sanity: HEAD tree carries cell bodies (a, b)
+PASS P11c dials ref tree contains NO body files
+PASS P11d every path in dials ref is cells/<alias>/dials/<n> (32 dial files)
+PASS P12a tick (a dial2=0.66) committed
+PASS P12b refs/quilt/HEAD exists after tick
+PASS P12c ls-tree shows .quilt/live/last_receipt
+PASS P12d ls-tree shows .quilt/live/watch_tail
+PASS P12e watch_tail holds this tick's line (tick 494a402 ...)
+PASS P12f git ls-remote . refs/quilt/HEAD answers (fded3f79e98d2d4a9c078e3f8f3045ea125bcc0a)
+
+# ---- per-pin verdicts ----
+P1 receipt+watch on dial commit : PASS
+P2 freeze enforcement          : PASS
+P3 cascade                      : PASS
+P4 rewind                       : PASS
+P5 clone needs quilt-init       : PASS
+P6 non-cell commit silent       : PASS
+P10 refs/quilt/dials snapshot   : PASS
+P11 dials-only tree             : PASS
+P12 refs/quilt/HEAD live state  : PASS
+
+PINS: 9/9 pins pass (38 checks pass, 0 checks fail)
+PINS: ALL PASS
