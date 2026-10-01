@@ -1,0 +1,57 @@
+#!/bin/sh
+# quilt-verify — recompute the sig of every noted receipt; report mismatches.
+#
+# For each commit touching cells/ that carries a receipt note under
+# quilt/receipts, re-derive from the NOTE's own body and the COMMIT's own
+# metadata:
+#   sig = fnv1a-64(receipt-body || committer-ident || commit-tree)
+# (receipt-body = the note text up to the "sig" field; committer-ident =
+# the raw `committer ...` header; commit-tree = <commit>^{tree}) and
+# compare with the sig recorded in the note. Any edit to a note that does
+# not re-forge its sig — and any transplant of a receipt onto a different
+# commit or actor, since ident and tree are mixed in — is reported by
+# short hash. Shared helper .quilt/bin/quilt-fnv1a guarantees signer and
+# verifier agree byte for byte.
+#
+# This is a transport-level integrity mark, not a signature: fnv1a-64 is an
+# unkeyed checksum, so a tamperer who recomputes it passes. It catches
+# transport damage and lazy edits, not adversaries (that is what commit
+# signing is for; the pins deliberately avoid a GPG dependency).
+#
+# Exit 0 = all sigs agree (or nothing noted); exit 1 = >= 1 MISMATCH.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) \
+  || { echo "quilt-verify: not inside a git repository" >&2; exit 2; }
+cd "$ROOT" || exit 2
+
+n=0
+bad=0
+for c in $(git log --format=%H -- cells/); do
+  note=$(git notes --ref=quilt/receipts show "$c" 2>/dev/null) || continue
+  n=$((n + 1))
+  short=$(git rev-parse --short "$c")
+
+  noted=$(printf '%s\n' "$note" | sed -n 's/^  "sig": "\([0-9a-f][0-9a-f]*\)".*/\1/p')
+  if [ -z "$noted" ]; then
+    echo "quilt-verify: MISMATCH $short — receipt note has no sig field"
+    bad=$((bad + 1))
+    continue
+  fi
+
+  body=$(printf '%s\n' "$note" | sed '/^  "sig":/,$d')
+  ident=$(git cat-file commit "$c" | sed -n 's/^committer //p')
+  tree=$(git rev-parse "$c^{tree}")
+  want=$(printf '%s%s%s' "$body" "$ident" "$tree" | .quilt/bin/quilt-fnv1a)
+
+  if [ "$want" != "$noted" ]; then
+    echo "quilt-verify: MISMATCH $short — noted sig $noted, computed $want"
+    bad=$((bad + 1))
+  fi
+done
+
+if [ "$bad" -eq 0 ]; then
+  echo "quilt-verify: $n noted receipt(s), all sigs OK"
+  exit 0
+fi
+echo "quilt-verify: $n noted receipt(s), $bad MISMATCH (listed above)"
+exit 1

@@ -20,8 +20,19 @@
 #                       watch line); after quilt-init they do.
 #   P6  non-cell     -> a README-only commit creates NO receipt and NO
 #                       watch.log line.
+#   P7  notes        -> a tick also leaves a receipt NOTE on the commit
+#                       (git notes --ref=quilt/receipts): JSON with the full
+#                       commit hash, the alias, a 16-hex sig, byte-identical
+#                       to .quilt/receipts/<short>.json.
+#   P8  audit+ride   -> quilt-audit lists every noted cell commit's receipt;
+#                       file receipts do NOT cross a clone, noted ones DO
+#                       (quilt-init wires the fetch refspec) and the sig
+#                       still verifies in the clone.
+#   P9  tamper       -> rewriting a noted receipt with a wrong alias (git
+#                       notes add -f, sig kept) makes quilt-verify exit
+#                       non-zero, say MISMATCH, and name the commit.
 #
-# Exit 0 iff all six pin verdicts are PASS.
+# Exit 0 iff all nine pin verdicts are PASS.
 
 set -u
 
@@ -275,6 +286,149 @@ pin_p6() {
   fi
 }
 
+# ---------------------------------------------------------------- P7
+pin_p7() {
+  local d full short
+  if ! d=$(new_repo p7); then bad "P7-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+
+  if ( cd "$d" && ./.quilt/bin/quilt-tick a 3 0.77 ) >/dev/null 2>&1; then
+    ok "P7a tick commit accepted"
+  else
+    bad "P7a tick commit failed"; return
+  fi
+  full=$(git -C "$d" rev-parse HEAD)
+  short=$(git -C "$d" rev-parse --short HEAD)
+
+  if git -C "$d" notes --ref=quilt/receipts show "$full" > "$SCRATCH/p7-note.json" 2>/dev/null; then
+    ok "P7b receipt note attached to the tick commit (refs/notes/quilt/receipts)"
+  else
+    bad "P7b no receipt note on $full"; return
+  fi
+  if grep -qF "$full" "$SCRATCH/p7-note.json"; then
+    ok "P7c note JSON carries the full commit hash"
+  else
+    bad "P7c note JSON lacks the commit hash"
+  fi
+  if grep -q '"a"' "$SCRATCH/p7-note.json"; then
+    ok "P7d note JSON names cell a"
+  else
+    bad "P7d note JSON lacks alias a"
+  fi
+  if grep -Eq '"sig": "[0-9a-f]{16}"' "$SCRATCH/p7-note.json"; then
+    ok "P7e note JSON carries a 16-hex sig"
+  else
+    bad "P7e note JSON lacks a 16-hex sig field"
+  fi
+  if cmp -s "$SCRATCH/p7-note.json" "$d/.quilt/receipts/$short.json"; then
+    ok "P7f note == .quilt/receipts/$short.json byte-for-byte"
+  else
+    bad "P7f note and file receipt differ"
+  fi
+}
+
+# ---------------------------------------------------------------- P8
+pin_p8() {
+  local d c full short out rc blocks
+  if ! d=$(new_repo p8); then bad "P8-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 5 0.5 ) >/dev/null 2>&1 \
+    || { bad "P8a first tick failed"; return; }
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 6 0.6 ) >/dev/null 2>&1 \
+    || { bad "P8b second tick failed"; return; }
+  full=$(git -C "$d" rev-parse HEAD)
+  short=$(git -C "$d" rev-parse --short HEAD)
+
+  out=$( cd "$d" && ./.quilt/bin/quilt-audit 2>&1 ); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "P8c quilt-audit runs (exit 0)"
+  else
+    bad "P8c quilt-audit exit=$rc: $out"; return
+  fi
+  blocks=$(printf '%s\n' "$out" | grep -c '^== ')
+  if [ "$blocks" -eq 3 ]; then          # seed + two ticks
+    ok "P8d audit lists every noted cell commit (3 blocks: seed + 2 ticks)"
+  else
+    bad "P8d audit listed $blocks block(s) (want 3)"
+  fi
+  if printf '%s\n' "$out" | grep -q "^== $short " \
+     && printf '%s\n' "$out" | grep -qF "$full"; then
+    ok "P8e audit shows the last tick's receipt ($short / $full)"
+  else
+    bad "P8e audit missing the last tick's receipt"
+  fi
+
+  # transport: file receipts never cross a clone; noted ones must
+  c="$SCRATCH/p8-clone"
+  git clone -q "$d" "$c" || { bad "P8f clone failed"; return; }
+  if [ ! -d "$c/.quilt/receipts" ]; then
+    ok "P8g file receipts did NOT cross the clone (as designed)"
+  else
+    bad "P8g receipts dir crossed the clone?"
+  fi
+  ( cd "$c" && ./.quilt/bin/quilt-init ) >/dev/null 2>&1 \
+    || { bad "P8h quilt-init failed in the clone"; return; }
+  if git -C "$c" notes --ref=quilt/receipts show "$full" >/dev/null 2>&1; then
+    ok "P8i receipt note crossed the clone after quilt-init (fetched from origin)"
+  else
+    bad "P8i receipt note absent in the clone"
+  fi
+  out=$( cd "$c" && ./.quilt/bin/quilt-audit 2>&1 )
+  if printf '%s\n' "$out" | grep -qF "$full"; then
+    ok "P8j audit in the clone lists the origin repo's tick receipt"
+  else
+    bad "P8j clone audit missing the origin tick receipt"
+  fi
+  if ( cd "$c" && ./.quilt/bin/quilt-verify ) >/dev/null 2>&1; then
+    ok "P8k quilt-verify passes in the clone (sig survives transport)"
+  else
+    bad "P8k quilt-verify failed in the clone"
+  fi
+}
+
+# ---------------------------------------------------------------- P9
+pin_p9() {
+  local d full short out rc
+  if ! d=$(new_repo p9); then bad "P9-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 2 0.25 ) >/dev/null 2>&1 \
+    || { bad "P9a tick failed"; return; }
+  full=$(git -C "$d" rev-parse HEAD)
+  short=$(git -C "$d" rev-parse --short HEAD)
+
+  if out=$( cd "$d" && ./.quilt/bin/quilt-verify 2>&1 ); then
+    ok "P9b verify clean before tampering ($out)"
+  else
+    bad "P9b verify already failing: $out"; return
+  fi
+
+  # tamper: rewrite the noted receipt with a wrong alias, keep the old sig
+  if git -C "$d" notes --ref=quilt/receipts show "$full" 2>/dev/null \
+     | sed 's/"a"/"mallory"/g' \
+     | git -C "$d" notes --ref=quilt/receipts add -f -F - "$full" 2>/dev/null; then
+    ok "P9c tampered note installed via git notes add -f (alias a -> mallory, sig kept)"
+  else
+    bad "P9c tamper via git notes add -f failed"; return
+  fi
+
+  out=$( cd "$d" && ./.quilt/bin/quilt-verify 2>&1 ); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ok "P9d verify exits non-zero after tamper (rc=$rc)"
+  else
+    bad "P9d verify accepted the tampered note (rc=0)"
+  fi
+  if printf '%s\n' "$out" | grep -qi 'mismatch'; then
+    ok "P9e verify says MISMATCH"
+  else
+    bad "P9e verify output lacks 'mismatch': $out"
+  fi
+  if printf '%s\n' "$out" | grep -q "$short"; then
+    ok "P9f verify names the tampered commit ($short)"
+  else
+    bad "P9f verify does not name $short: $out"
+  fi
+}
+
 # ---------------------------------------------------------------- main
 main() {
   say "# quilt-in-git pins  src=$SRC"
@@ -286,26 +440,37 @@ main() {
   pin_p4
   pin_p5
   pin_p6
+  pin_p7
+  pin_p8
+  pin_p9
   say ""
   say "# ---- per-pin verdicts ----"
-  local v1 v2 v3 v4 v5 v6 n
+  local v1 v2 v3 v4 v5 v6 v7 v8 v9 n
   case "$FAILS" in *" P1"*) v1=FAIL;; *) v1=PASS;; esac
   case "$FAILS" in *" P2"*) v2=FAIL;; *) v2=PASS;; esac
   case "$FAILS" in *" P3"*) v3=FAIL;; *) v3=PASS;; esac
   case "$FAILS" in *" P4"*) v4=FAIL;; *) v4=PASS;; esac
   case "$FAILS" in *" P5"*) v5=FAIL;; *) v5=PASS;; esac
   case "$FAILS" in *" P6"*) v6=FAIL;; *) v6=PASS;; esac
+  case "$FAILS" in *" P7"*) v7=FAIL;; *) v7=PASS;; esac
+  case "$FAILS" in *" P8"*) v8=FAIL;; *) v8=PASS;; esac
+  case "$FAILS" in *" P9"*) v9=FAIL;; *) v9=PASS;; esac
   say "P1 receipt+watch on dial commit : $v1"
   say "P2 freeze enforcement          : $v2"
   say "P3 cascade                      : $v3"
   say "P4 rewind                       : $v4"
   say "P5 clone needs quilt-init       : $v5"
   say "P6 non-cell commit silent       : $v6"
+  say "P7 receipt note on tick commit  : $v7"
+  say "P8 audit + receipts ride clone  : $v8"
+  say "P9 tampered note detected       : $v9"
   n=0
-  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6"; do [ "$v" = PASS ] && n=$((n+1)); done
+  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6" "$v7" "$v8" "$v9"; do
+    [ "$v" = PASS ] && n=$((n+1))
+  done
   say ""
-  say "PINS: $n/6 pins pass ($PASS checks pass, $FAIL checks fail)"
-  if [ "$n" -eq 6 ]; then
+  say "PINS: $n/9 pins pass ($PASS checks pass, $FAIL checks fail)"
+  if [ "$n" -eq 9 ]; then
     say "PINS: ALL PASS"
     rm -rf "$SCRATCH"
     exit 0

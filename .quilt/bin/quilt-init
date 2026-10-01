@@ -4,6 +4,9 @@
 #   mkdir -p cells .quilt/{receipts,bin,hooks}
 #   git config core.hooksPath .quilt/hooks      (modern git; no .git/hooks symlinks)
 #   (re)write .quilt/hooks/{pre-commit,post-commit}, chmod +x
+#   wire +refs/notes/quilt/receipts into remote.origin.fetch (when a remote
+#   exists) and fetch it — receipt notes ride fetch/pull, but a plain
+#   `git clone` does NOT copy refs/notes/*, so this step brings them over
 #
 # Idempotent: safe to re-run. The hook files are generated from this script —
 # edit quilt-init, not the hook files. MUST be run once per clone: the hooks
@@ -57,13 +60,17 @@ cat > .quilt/hooks/post-commit <<'QUILT_HOOK_EOF'
 #
 # For a commit that touches cells/:
 #   1. .quilt/bin/quilt-receipt  writes .quilt/receipts/<short>.json
-#   2. .quilt/bin/quilt-cascade  recomputes dial 14 of linked cells
-#   3. if cascade changed dial files: git add cells/ and auto-commit
+#   2. git notes --ref=quilt/receipts attaches that same receipt JSON to the
+#      commit — notes are real git objects, so receipts ride fetch/push/
+#      clone with the branch (the .quilt/receipts/ files never leave the
+#      working tree)
+#   3. .quilt/bin/quilt-cascade  recomputes dial 14 of linked cells
+#   4. if cascade changed dial files: git add cells/ and auto-commit
 #      "quilt: cascade after <short>" with --no-verify
-#   4. append "tick <short> <short> <cells>" to .quilt/watch.log
+#   5. append "tick <short> <short> <cells>" to .quilt/watch.log
 #
 # Commits touching no cells/ path exit 0 silently, as do the hook's own
-# "quilt: cascade after ..." commits (no recursion).
+# "quilt: cascade after ..." commits (no recursion, no receipt, no note).
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$ROOT" || exit 1
@@ -79,6 +86,10 @@ SHORT=$(git rev-parse --short HEAD)
 CELLS=$(printf '%s\n' "$CELL_PATHS" | cut -d/ -f2 | sort -u | paste -sd, -)
 
 .quilt/bin/quilt-receipt >/dev/null
+if [ -f ".quilt/receipts/$SHORT.json" ]; then
+  git notes --ref=quilt/receipts add -f -F ".quilt/receipts/$SHORT.json" HEAD \
+    >/dev/null 2>&1 || true
+fi
 .quilt/bin/quilt-cascade
 
 if [ -n "$(git status --porcelain -- cells/)" ]; then
@@ -97,6 +108,21 @@ for b in .quilt/bin/quilt-*; do
 done
 touch .quilt/watch.log
 
+# receipt notes ride fetch/pull once this refspec is wired; a plain
+# `git clone` does not copy refs/notes/*, so fetch them in now (best
+# effort — offline or noteless origins are fine)
+if git remote get-url origin >/dev/null 2>&1; then
+  if ! git config --get-all remote.origin.fetch 2>/dev/null \
+       | grep -q 'refs/notes/quilt/receipts'; then
+    git config --add remote.origin.fetch \
+      '+refs/notes/quilt/receipts:refs/notes/quilt/receipts'
+  fi
+  if git fetch -q origin refs/notes/quilt/receipts:refs/notes/quilt/receipts 2>/dev/null; then
+    echo "quilt: receipt notes fetched from origin (refs/notes/quilt/receipts)"
+  fi
+fi
+
 echo "quilt: initialised at $ROOT"
 echo "quilt: hooks active (core.hooksPath=.quilt/hooks)"
 echo "quilt: ticks are ordinary commits touching cells/ — try .quilt/bin/quilt-tick <alias> <dial> <value>"
+echo "quilt: receipts ride git notes — audit: .quilt/bin/quilt-audit   verify: .quilt/bin/quilt-verify"

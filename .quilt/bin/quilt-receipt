@@ -3,9 +3,18 @@
 #
 # Fields: commit (full hash), changed_cells (aliases under cells/ touched by
 # HEAD), key_dials (per cell: obstruction = dial 1, freeze = dial 15, read
-# from the committed tree), ts. The timestamp is the git commit time
+# from the committed tree), ts, sig. The timestamp is the git commit time
 # (`git log -1 --format=%ct`) — never wall clock — so receipts are
 # deterministic and reproducible from history alone.
+#
+# sig = fnv1a-64 over  BODY || committer-ident || commit-tree  where BODY is
+# the receipt text below up to and including the trailing comma after "ts"
+# (i.e. the whole receipt except the sig field, no trailing newline), the
+# committer ident is the raw `committer ...` header of HEAD, and the tree is
+# HEAD^{tree}. A cheap TRANSPORT-LEVEL integrity mark — recomputable by
+# .quilt/bin/quilt-verify — tying the receipt to THAT commit by THAT actor.
+# fnv1a-64 is a checksum, not cryptography: it catches transport damage and
+# un-reforged edits, not an adversary who recomputes it.
 #
 # Echoes the short hash on success (used by the post-commit hook).
 
@@ -36,19 +45,15 @@ for c in $CELLS; do
   dial_json="$dial_json    \"$c\": {\"obstruction\": $obs, \"freeze\": $frz},
 "
 done
+dials=""
+[ -z "$dial_json" ] || dials=$(printf '%s' "$dial_json" | sed '$ s/,$//')
 
-OUT=".quilt/receipts/$SHORT.json"
-{
-  printf '{\n'
-  printf '  "commit": "%s",\n' "$FULL"
-  printf '  "changed_cells": [%s],\n' "$cell_list"
-  printf '  "key_dials": {\n'
-  if [ -n "$dial_json" ]; then
-    printf '%s' "$dial_json" | sed '$ s/,$//'
-  fi
-  printf '  },\n'
-  printf '  "ts": %s\n' "$TS"
-  printf '}\n'
-} > "$OUT"
+BODY=$(printf '{\n  "commit": "%s",\n  "changed_cells": [%s],\n  "key_dials": {\n%s\n  },\n  "ts": %s,' \
+  "$FULL" "$cell_list" "$dials" "$TS")
+IDENT=$(git cat-file commit HEAD | sed -n 's/^committer //p')
+TREE=$(git rev-parse 'HEAD^{tree}')
+SIG=$(printf '%s%s%s' "$BODY" "$IDENT" "$TREE" | .quilt/bin/quilt-fnv1a)
+
+printf '%s\n  "sig": "%s"\n}\n' "$BODY" "$SIG" > ".quilt/receipts/$SHORT.json"
 
 echo "$SHORT"
