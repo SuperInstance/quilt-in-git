@@ -20,8 +20,16 @@
 #                       watch line); after quilt-init they do.
 #   P6  non-cell     -> a README-only commit creates NO receipt and NO
 #                       watch.log line.
+#   P7  quilt head   -> a dial commit moves refs/quilt/HEAD to that commit;
+#                       a non-cell commit does NOT move it.
+#   P8  head travels -> refs/quilt/HEAD survives clone WITHOUT quilt-init
+#                       (the ref is data; the hook is runtime — P5's law from
+#                       the other side).
+#   P9  head honest  -> in a repo with zero ticks, .quilt/bin/quilt-head
+#                       exits non-zero and says why (never fabricates a
+#                       position).
 #
-# Exit 0 iff all six pin verdicts are PASS.
+# Exit 0 iff all nine pin verdicts are PASS.
 
 set -u
 
@@ -275,6 +283,83 @@ pin_p6() {
   fi
 }
 
+# ---------------------------------------------------------------- P7
+pin_p7() {
+  local d tick1 tick2
+  if ! d=$(new_repo p7); then bad "P7-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 0 0.42 ) >/dev/null 2>&1 \
+    || { bad "P7a tick failed"; return; }
+  tick1=$(git -C "$d" rev-parse HEAD)
+  if [ "$(git -C "$d" rev-parse --verify -q refs/quilt/HEAD)" = "$tick1" ]; then
+    ok "P7b refs/quilt/HEAD == tick commit"
+  else
+    bad "P7b refs/quilt/HEAD does not match tick commit"
+  fi
+
+  ( cd "$d" && echo "# docs" > README.md && git add README.md \
+      && git commit -qm "docs: readme" ) >/dev/null 2>&1 \
+    || { bad "P7c docs commit failed"; return; }
+  if [ "$(git -C "$d" rev-parse --verify -q refs/quilt/HEAD)" = "$tick1" ]; then
+    ok "P7d non-cell commit did NOT move the quilt head"
+  else
+    bad "P7d non-cell commit moved refs/quilt/HEAD"
+  fi
+
+  tick2=$(git -C "$d" rev-parse HEAD)
+  if [ "$tick2" != "$tick1" ]; then
+    ok "P7e sanity: HEAD advanced on docs commit"
+  else
+    bad "P7e sanity: HEAD did not advance"
+  fi
+
+  out=$(cd "$d" && ./.quilt/bin/quilt-head 2>&1) \
+    || { bad "P7f quilt-head exited non-zero on ticked repo: $out"; return; }
+  case "$out" in
+    "$(git -C "$d" rev-parse --short "$tick1")"*) ok "P7g quilt-head reports the tick ($out)";;
+    *) bad "P7g quilt-head output wrong: $out";;
+  esac
+}
+
+# ---------------------------------------------------------------- P8
+pin_p8() {
+  local d c ref_main
+  if ! d=$(new_repo p8); then bad "P8-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 3 0.7 ) >/dev/null 2>&1 \
+    || { bad "P8a tick failed"; return; }
+  ref_main=$(git -C "$d" rev-parse --verify -q refs/quilt/HEAD) \
+    || { bad "P8b no refs/quilt/HEAD after tick"; return; }
+
+  git clone -q "$d" "$SCRATCH/p8clone" 2>/dev/null \
+    || { bad "P8c clone failed"; return; }
+  if [ "$(git -C "$SCRATCH/p8clone" rev-parse --verify -q refs/quilt/HEAD)" = "$ref_main" ]; then
+    ok "P8d quilt head travelled with the clone (no quilt-init needed)"
+  else
+    bad "P8d quilt head lost/absent in fresh clone"
+  fi
+}
+
+# ---------------------------------------------------------------- P9
+pin_p9() {
+  local d rc out
+  if ! d=$(new_repo p9); then bad "P9-0 setup (quilt-init runnable?)"; return; fi
+  # seed_cell commits a cells/ path -> that IS a tick. For the zero-tick
+  # honesty pin, use a repo whose only commit is the runtime skeleton.
+  rc=0
+  out=$(cd "$d" && ./.quilt/bin/quilt-head 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ok "P9a quilt-head refuses on zero-tick repo (exit $rc)"
+  else
+    bad "P9a quilt-head succeeded on zero-tick repo: $out"
+  fi
+  case "$out" in
+    *"no ticks"*) ok "P9b refusal names the reason: $out";;
+    *) bad "P9b refusal does not name the reason: $out";;
+  esac
+}
+
 # ---------------------------------------------------------------- main
 main() {
   say "# quilt-in-git pins  src=$SRC"
@@ -286,26 +371,35 @@ main() {
   pin_p4
   pin_p5
   pin_p6
+  pin_p7
+  pin_p8
+  pin_p9
   say ""
   say "# ---- per-pin verdicts ----"
-  local v1 v2 v3 v4 v5 v6 n
+  local v1 v2 v3 v4 v5 v6 v7 v8 v9 n
   case "$FAILS" in *" P1"*) v1=FAIL;; *) v1=PASS;; esac
   case "$FAILS" in *" P2"*) v2=FAIL;; *) v2=PASS;; esac
   case "$FAILS" in *" P3"*) v3=FAIL;; *) v3=PASS;; esac
   case "$FAILS" in *" P4"*) v4=FAIL;; *) v4=PASS;; esac
   case "$FAILS" in *" P5"*) v5=FAIL;; *) v5=PASS;; esac
   case "$FAILS" in *" P6"*) v6=FAIL;; *) v6=PASS;; esac
+  case "$FAILS" in *" P7"*) v7=FAIL;; *) v7=PASS;; esac
+  case "$FAILS" in *" P8"*) v8=FAIL;; *) v8=PASS;; esac
+  case "$FAILS" in *" P9"*) v9=FAIL;; *) v9=PASS;; esac
   say "P1 receipt+watch on dial commit : $v1"
   say "P2 freeze enforcement          : $v2"
   say "P3 cascade                      : $v3"
   say "P4 rewind                       : $v4"
   say "P5 clone needs quilt-init       : $v5"
   say "P6 non-cell commit silent       : $v6"
+  say "P7 refs/quilt/HEAD tracks ticks : $v7"
+  say "P8 quilt head travels with clone: $v8"
+  say "P9 zero-tick head is honest     : $v9"
   n=0
-  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6"; do [ "$v" = PASS ] && n=$((n+1)); done
+  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6" "$v7" "$v8" "$v9"; do [ "$v" = PASS ] && n=$((n+1)); done
   say ""
-  say "PINS: $n/6 pins pass ($PASS checks pass, $FAIL checks fail)"
-  if [ "$n" -eq 6 ]; then
+  say "PINS: $n/9 pins pass ($PASS checks pass, $FAIL checks fail)"
+  if [ "$n" -eq 9 ]; then
     say "PINS: ALL PASS"
     rm -rf "$SCRATCH"
     exit 0
