@@ -14,12 +14,12 @@ are marked **INFERRED**. No backend design appears here; each section closes
 with what a user gains and loses.
 
 **Section index.**
-1. Jujutsu: working-copy-as-commit, change vs commit, undo — *PENDING (research quota exhausted Oct 2; background sections 1/2/4/6/7 unfetched)*
+1. Jujutsu: working-copy-as-commit, change vs commit, undo — *DONE (3 primary docs fetched Oct 2)*
 2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale — *PENDING (same)*
 3. CRDTs: Automerge and Yjs vs dials-as-files
 4. git worktree orchestration precedents — *PENDING (same)*
 5. Cloudflare Artifacts + Workers platform capabilities
-6. Agent-native git experiments, today — *PENDING (same)*
+6. Agent-native git experiments, today — *DONE (4 fetched sources, INFERRED flagged)*
 7. Synthesis table: what quilt-in-git should steal — *PENDING (same)*
 
 ---
@@ -291,3 +291,88 @@ matches quilt-in-git's tick-as-commit model almost exactly.
 quality depends entirely on the harness choosing to pin and verify
 (claim-vs-receipt gap identical to the one our decorative-pin audit found
 fleet-side Oct 2).
+
+---
+
+## 1. Jujutsu: working-copy-as-commit, change vs commit, undo
+
+*(Researched directly Oct 2, 2026 — three primary docs fetched; claims below
+carry their URLs. Prior "PENDING" note in the index superseded by this section.)*
+
+**The working copy is a commit, always.** In jj there is no staging area and
+no "uncommitted changes" concept: the working copy is itself a commit (`@`),
+and most commands snapshot it automatically — "unlike most other VCSs,
+Jujutsu will automatically create commits from the working-copy contents when
+they have changed" (source:
+https://jj-vcs.github.io/jj/latest/working-copy/). New files are *implicitly*
+tracked by default — add a file to the directory and the next `jj st` commits
+it; delete it and it is untracked (source: same). Commits are cheap,
+mutable, and rewritten freely (`jj describe`, `jj squash`, `jj amend`);
+what Git calls "history" is in jj a *view* over a DAG of changes that can be
+rebased, merged, and described at any time.
+
+**Conflicts are first-class citizens, not error states.** If a rebase or
+merge conflicts, "the conflict will be recorded in the rebased commit and
+the rebase operation will succeed. You can then resolve the conflict whenever
+you want. Conflicted states can be further rebased, merged, or backed out"
+(source: https://jj-vcs.github.io/jj/latest/conflicts/). The stored form is a
+*logical* representation (sides + base + diffs), materialized as markers only
+when written to the working copy — and the parser recreates the conflict
+state from the markers on the next snapshot, so a half-resolved conflict
+survives ordinary file edits. Descendants of rewritten commits auto-rebase
+(Mercurial Changeset Evolution "mostly replaced" by this), merge commits
+rebase correctly including their conflict resolutions, and criss-cross merges
+"become trivial" (source: same). Advantages listed by the docs themselves:
+no `--continue` workflow, postpone resolution indefinitely, collaborative
+conflict resolution (source: same).
+
+**The operation log is a rewind handle over repo states, not commits.** Every
+operation that modifies the repo is recorded with a snapshot ("view") of
+where all bookmarks/tags/refs and working-copy commits pointed, plus
+timestamps, username, hostname, description (source:
+https://jj-vcs.github.io/jj/latest/operation-log/). `jj undo` walks back one
+operation; `jj op revert` reverts a specific one; `jj op restore` restores
+the whole repo to an earlier point; `--at-op <id>` loads any historical
+state read-only. Because commands load the latest operation and conflicts
+surface later rather than blocking, "it allows lock-free concurrency — you
+can run concurrent jj commands without corrupting the repo, even... on
+different machines" over a write-ordered filesystem (source: same).
+
+**What a user gains.** A working copy that cannot be lost — the "uncommitted
+changes died with the session" failure class is architecturally absent,
+because there is no uncommitted state (source: working-copy doc). Rewind is
+total: not just which commits existed but where every pointer and every
+workspace's `@` pointed (source: operation-log doc). Concurrent agents on a
+shared repo don't corrupt it; divergent operations are detected, not
+deadlocked (source: operation-log doc). And a merge of two agents' contested
+dial writes need not fail the operation — it can be recorded and resolved
+later (source: conflicts doc).
+
+**What a user loses / where it bites.** Implicit tracking means *everything*
+in the tree wants to become a commit unless ignored or untracked — for an
+agent that litters scratch files, `.gitignore` discipline is load-bearing
+(source: working-copy doc). Conflict resolution ergonomics for non-file
+objects (directory/file/symlink conflicts) are explicitly unfinished
+(issue #19 in the conflicts doc). The Git interop story means conflicts
+shared with plain-git collaborators materialize as nested-marker pain —
+"you probably shouldn't [share conflicts] if some people interact with your
+project using Git" (source: conflicts doc). Stale-working-copy recovery adds
+a state class Git users never think about (source: working-copy doc). And
+the mental model — mutable commits, change-vs-commit, op log — is a real
+relearning cost over plain git (INFERRED: no doc states this directly; it
+follows from the three docs' existence as concept tutorials).
+
+**Transfer to quilt-in-git.** Three steals, in priority order:
+1. *Rewind handle*: jj's operation log is the strongest existing answer to
+   "rewind" from the design doc — but at repo-operation granularity, not
+   tick granularity. A quilt rewind wants dial-position history; the op log
+   shows that the undo substrate must record *pointer state*, not just
+   commits (source: operation-log doc; transfer marked INFERRED).
+2. *Contested-dial merge as recorded state, not failure*: quilt's cascade
+   already models contested dials; jj shows the merge itself can commit,
+   carry the conflict logically, and be resolved whenever (source: conflicts
+   doc; transfer INFERRED).
+3. *Auto-snapshot discipline*: dials-as-files plus "most commands commit the
+   working copy" would make every tool invocation a tick — which is either
+   the cleanest tick story yet or a receipt-chain flood, depending on hook
+   design (source: working-copy doc; transfer INFERRED).
