@@ -1,0 +1,50 @@
+#!/bin/sh
+# quilt-focus <alias> | --off — sparse-checkout ONE organ of the body.
+#
+#   .quilt/bin/quilt-focus a      worktree holds ONLY cells/a/ and .quilt/
+#   .quilt/bin/quilt-focus --off  full worktree again
+#
+# An agent working one organ should not have to hold the whole body: focus
+# materializes just the target cell plus the runtime (.quilt/ holds the
+# hooks, receipts and watch.log the agent still needs). Nothing is deleted
+# — sparse-checkout only flips skip-worktree bits in the index; every
+# other cell's files stay in the index and in history.
+#
+# The received guarantee (documented, pinned by P14):
+#   * a focused agent can still read and write its OWN cell's dials —
+#     they are materialized;
+#   * the cascade still sees EVERY cell's dial values, because
+#     quilt-cascade reads the index (`git show :cells/...`), not the
+#     worktree. Cascade updates to out-of-focus cells land in the index
+#     (update-index --cacheinfo) and ride the next commit — visible via
+#     `git ls-files -s` + `git cat-file`, no unfocus needed.
+#   (The wave-2 cascade DID read the worktree and would have gone blind
+#   under focus; the claim was checked, found false, and the hook fixed.)
+#
+# Focus from a clean tree: git refuses to drop worktree files that carry
+# uncommitted changes, which is the safe failure.
+
+set -e
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) \
+  || { echo "quilt-focus: not inside a git repository" >&2; exit 1; }
+cd "$ROOT"
+
+if [ "${1:-}" = "--off" ]; then
+  git sparse-checkout disable
+  echo "quilt: focus off — full worktree restored"
+  exit 0
+fi
+
+[ $# -eq 1 ] || { echo "usage: quilt-focus <alias> | --off" >&2; exit 2; }
+alias=$1
+
+# the cell must exist in the index (any tracked file under cells/<alias>/)
+if [ -z "$(git ls-files -- "cells/$alias/")" ]; then
+  echo "quilt-focus: no such cell 'cells/$alias/' in the index" >&2
+  exit 1
+fi
+
+git sparse-checkout set --no-cone "/cells/$alias/" "/.quilt/"
+echo "quilt: focused on '$alias' — worktree holds cells/$alias/ + .quilt/ only"
+echo "quilt: index untouched (cascade reads it); quilt-focus --off restores the body"

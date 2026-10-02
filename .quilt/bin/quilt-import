@@ -1,0 +1,86 @@
+#!/bin/sh
+# quilt-import <path.bundle> — land a bundle in THIS clone.
+#
+# Run it inside a fresh clone of the bundle (the documented flow):
+#
+#   git clone quilt.bundle far-side/ && cd far-side
+#   .quilt/bin/quilt-import ../quilt.bundle
+#
+# Steps:
+#   1. git bundle verify     — the file is intact and applies here
+#   2. git fetch refs/quilt/*  — a plain clone carries only heads; the
+#      quilt refs ride separately
+#   3. git checkout <branch>  — the branch the bundle's HEAD points at
+#   4. .quilt/bin/quilt-init  — hooks are local config; every clone
+#      re-arms them (wave-2 limit, unchanged)
+#   5. regenerate the journal from PURE history: walk every commit
+#      oldest-first; each non-cascade commit touching cells/ gets its
+#      receipt back (quilt-receipt <rev> — deterministic by design) and
+#      its watch line; then the result is verified byte-identical to the
+#      journal carried in the bundle (mismatch = exit 1). A journal that
+#      was never committed regenerates fresh instead — history is the
+#      only source of truth either way.
+
+set -e
+
+[ $# -eq 1 ] || { echo "usage: quilt-import <path.bundle>   (inside a clone of that bundle)" >&2; exit 2; }
+B=$1
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) \
+  || { echo "quilt-import: not inside a git repository" >&2; exit 1; }
+cd "$ROOT"
+
+git bundle verify "$B" >/dev/null 2>&1 \
+  || { echo "quilt-import: bundle failed verification: $B" >&2; exit 1; }
+
+# refs/quilt/* are not carried by a plain clone — fetch them explicitly
+if git bundle list-heads "$B" | awk '{print $2}' | grep -q '^refs/quilt/'; then
+  git fetch --quiet "$B" '+refs/quilt/*:refs/quilt/*'
+fi
+
+# land on the branch the bundle's HEAD points at
+HEADSHA=$(git bundle list-heads "$B" | awk '$2=="HEAD"{print $1}')
+BRANCH=$(git for-each-ref --format='%(refname:short) %(objectname)' refs/heads/ \
+         | awk -v s="$HEADSHA" '$2==s{print $1; exit}')
+BRANCH=${BRANCH:-main}
+CUR=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+if [ "$CUR" != "$BRANCH" ]; then
+  git checkout -q "$BRANCH" 2>/dev/null \
+    || { echo "quilt-import: branch '$BRANCH' not present — clone the bundle first:" >&2
+         echo "       git clone $B <dir>" >&2; exit 1; }
+fi
+
+.quilt/bin/quilt-init >/dev/null
+
+# ---- regenerate the journal from history ----------------------------------
+: > .quilt/watch.log
+NTICKS=0
+for c in $(git rev-list --reverse HEAD); do
+  case "$(git log -1 --format=%s "$c")" in
+    "quilt: cascade after"*) continue ;;
+  esac
+  paths=$(git diff-tree --root --no-commit-id --name-only -r "$c" -- cells/)
+  [ -n "$paths" ] || continue
+  .quilt/bin/quilt-receipt "$c" >/dev/null
+  short=$(git rev-parse --short "$c")
+  cells=$(printf '%s\n' "$paths" | cut -d/ -f2 | sort -u | paste -sd, -)
+  printf 'tick %s %s %s\n' "$short" "$short" "$cells" >> .quilt/watch.log
+  NTICKS=$((NTICKS + 1))
+done
+
+# ---- verify against the carried journal ------------------------------------
+if git cat-file -e "HEAD:.quilt/watch.log" 2>/dev/null; then
+  bad=$(git status --porcelain -- .quilt/receipts .quilt/watch.log \
+        | grep -v '^??' || true)
+  if [ -n "$bad" ]; then
+    echo "quilt-import: journal mismatch — regenerated artifacts differ from carried history:" >&2
+    printf '%s\n' "$bad" >&2
+    exit 1
+  fi
+  echo "quilt: journal verified — regenerated receipts + watch.log byte-identical to the carried journal"
+else
+  echo "quilt: journal was not carried in history — regenerated $NTICKS ticks fresh (git add .quilt && git commit to fold it in)"
+fi
+
+NQ=$(git for-each-ref --format='%(refname)' refs/quilt/ | grep -c . || true)
+echo "quilt: imported $BRANCH + $NQ refs/quilt/* — hooks armed, $NTICKS ticks in the journal"

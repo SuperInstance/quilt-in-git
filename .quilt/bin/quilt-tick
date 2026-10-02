@@ -21,6 +21,18 @@ awk -v v="$value" 'BEGIN{ if (v + 0 != v) exit 1 }' \
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
 
+# Focus guard: under quilt-focus, ticking a cell whose files are not
+# materialized would write into a hole the sparse worktree cannot see
+# (and git refuses to add such paths). The cell must be in focus — or the
+# focus off. Cells not yet in the index (brand new) are always allowed.
+if git config --get core.sparseCheckout >/dev/null 2>&1 \
+   && [ -n "$(git ls-files -- "cells/$alias/")" ] \
+   && [ -z "$(git ls-files -v -- "cells/$alias/" | grep '^H')" ]; then
+  echo "quilt-tick: cell '$alias' is not in focus (sparse worktree lacks its files)" >&2
+  echo "       .quilt/bin/quilt-focus $alias first, or quilt-focus --off" >&2
+  exit 1
+fi
+
 mkdir -p "cells/$alias/dials"
 printf '%s\n' "$value" > "cells/$alias/dials/$dial"
 git add "cells/$alias/dials/$dial"

@@ -1,0 +1,58 @@
+# quilt-in-git pins  src=/tmp/zlanes2/laneG/wt
+# scratch=/tmp/quilt-pins-WyBbCS  git=2.43.0
+
+PASS P1a dial commit accepted
+PASS P1b receipt exists (.quilt/receipts/008d290.json)
+PASS P1c receipt contains commit hash
+PASS P1d receipt contains alias a
+PASS P1e watch.log grew by exactly one line (1->2)
+PASS P1f watch line starts with 'tick' (tick 008d290 008d290 a)
+PASS P2a freeze commit (dial15=0.8) accepted
+PASS P2b next commit touching cell rejected (rc=1)
+PASS P2c error mentions frozen
+PASS P2d dial file unchanged by rejected commit (still 0.7 as written)
+PASS P2e committed dial1 still 0.0
+PASS P2f no new commit was created
+PASS P3a tick a dial1=0.9 committed
+PASS P3b b.dials/14 == 0.4500 (== 0.45)
+PASS P3c 'quilt: cascade after' commit exists
+PASS P4c new dial value 0.99 committed
+PASS P4d rewind (checkout prev -- cells/a/) restores 0.11
+PASS P5c fresh clone: no receipt, no watch line (hooks inert)
+PASS P5e quilt-init set core.hooksPath=.quilt/hooks
+PASS P5g receipt appears after quilt-init (69edeee.json)
+PASS P5h watch.log grew after quilt-init
+PASS P6b non-cell commit created NO receipt
+PASS P6c non-cell commit added NO watch.log line
+PASS P7a tick commit accepted
+PASS P7b receipt note attached to the tick commit (refs/notes/quilt/receipts)
+PASS P7c note JSON carries the full commit hash
+PASS P7d note JSON names cell a
+PASS P7e note JSON carries a 16-hex sig
+PASS P7f note == .quilt/receipts/5984620.json byte-for-byte
+PASS P8c quilt-audit runs (exit 0)
+PASS P8d audit lists every noted cell commit (3 blocks: seed + 2 ticks)
+PASS P8e audit shows the last tick's receipt (4401879 / 4401879cbd95e91be4ad18fff5171e777b4a654f)
+PASS P8g file receipts did NOT cross the clone (as designed)
+PASS P8i receipt note crossed the clone after quilt-init (fetched from origin)
+PASS P8j audit in the clone lists the origin repo's tick receipt
+PASS P8k quilt-verify passes in the clone (sig survives transport)
+PASS P9b verify clean before tampering (quilt-verify: 2 noted receipt(s), all sigs OK)
+PASS P9c tampered note installed via git notes add -f (alias a -> mallory, sig kept)
+PASS P9d verify exits non-zero after tamper (rc=1)
+PASS P9e verify says MISMATCH
+PASS P9f verify names the tampered commit (3e191c2)
+
+# ---- per-pin verdicts ----
+P1 receipt+watch on dial commit : PASS
+P2 freeze enforcement          : PASS
+P3 cascade                      : PASS
+P4 rewind                       : PASS
+P5 clone needs quilt-init       : PASS
+P6 non-cell commit silent       : PASS
+P7 receipt note on tick commit  : PASS
+P8 audit + receipts ride clone  : PASS
+P9 tampered note detected       : PASS
+
+PINS: 9/9 pins pass (41 checks pass, 0 checks fail)
+PINS: ALL PASS
