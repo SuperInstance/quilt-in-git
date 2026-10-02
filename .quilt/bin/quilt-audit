@@ -1,0 +1,32 @@
+#!/bin/sh
+# quilt-audit — print every cell commit's receipt, from git notes.
+#
+# Receipts live twice: as files (.quilt/receipts/<short>.json — local
+# working-tree artifacts that never leave the clone) and as notes on the
+# tick commits themselves (refs/notes/quilt/receipts). Notes are real git
+# objects: they ride fetch/push with the branch (quilt-init wires the fetch
+# refspec), so the audit works in ANY clone that has the history — the
+# receipt travels with the commit it describes. Manual one-liner for a
+# quick overview:
+#   git log --notes=quilt/receipts --oneline -- cells/
+#
+# Output per noted cell commit, newest first:
+#   "== <short> <subject>" then the receipt JSON. Cascade auto-commits and
+# non-cell commits are silent (they carry no receipt note). Exit 0 even
+# when nothing is noted.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) \
+  || { echo "quilt-audit: not inside a git repository" >&2; exit 2; }
+cd "$ROOT" || exit 2
+
+n=0
+for c in $(git log --format=%H -- cells/); do
+  note=$(git notes --ref=quilt/receipts show "$c" 2>/dev/null) || continue
+  echo "== $(git rev-parse --short "$c") $(git log -1 --format=%s "$c")"
+  printf '%s\n' "$note"
+  n=$((n + 1))
+done
+
+[ "$n" -gt 0 ] || echo "quilt-audit: no noted receipts under cells/ (yet)"
+echo "quilt-audit: $n noted receipt(s)"
+exit 0

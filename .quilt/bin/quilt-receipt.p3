@@ -1,5 +1,5 @@
 #!/bin/sh
-# quilt-receipt [REV] — write .quilt/receipts/<short>.json for REV (HEAD).
+# quilt-receipt — write .quilt/receipts/<short>.json for HEAD.
 #
 # Fields: commit (full hash), changed_cells (aliases under cells/ touched by
 # HEAD), key_dials (per cell: obstruction = dial 1, freeze = dial 15, read
@@ -22,16 +22,15 @@ ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
 cd "$ROOT" || exit 1
 mkdir -p .quilt/receipts
 
-REV=${1:-HEAD}
-FULL=$(git rev-parse "$REV")
-SHORT=$(git rev-parse --short "$REV")
-TS=$(git log -1 --format=%ct "$REV")
-CELLS=$(git diff-tree --root --no-commit-id --name-only -r "$REV" -- cells/ \
+FULL=$(git rev-parse HEAD)
+SHORT=$(git rev-parse --short HEAD)
+TS=$(git log -1 --format=%ct HEAD)
+CELLS=$(git diff-tree --root --no-commit-id --name-only -r HEAD -- cells/ \
         | cut -d/ -f2 | sort -u)
 
 # dial value from the committed tree, coerced to a number, 0 when absent
 committed_dial() { # committed_dial <alias> <n>
-  git show "$REV:cells/$1/dials/$2" 2>/dev/null \
+  git show "HEAD:cells/$1/dials/$2" 2>/dev/null \
     | awk '{printf "%g", $1 + 0; found=1} END{if (!found) printf "0"}'
 }
 
@@ -51,8 +50,8 @@ dials=""
 
 BODY=$(printf '{\n  "commit": "%s",\n  "changed_cells": [%s],\n  "key_dials": {\n%s\n  },\n  "ts": %s,' \
   "$FULL" "$cell_list" "$dials" "$TS")
-IDENT=$(git cat-file commit "$REV" | sed -n 's/^committer //p')
-TREE=$(git rev-parse "$REV^{tree}")
+IDENT=$(git cat-file commit HEAD | sed -n 's/^committer //p')
+TREE=$(git rev-parse 'HEAD^{tree}')
 SIG=$(printf '%s%s%s' "$BODY" "$IDENT" "$TREE" | .quilt/bin/quilt-fnv1a)
 
 printf '%s\n  "sig": "%s"\n}\n' "$BODY" "$SIG" > ".quilt/receipts/$SHORT.json"

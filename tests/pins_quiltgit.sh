@@ -20,19 +20,18 @@
 #                       watch line); after quilt-init they do.
 #   P6  non-cell     -> a README-only commit creates NO receipt and NO
 #                       watch.log line.
-#   P10 dials ref    -> after a tick refs/quilt/dials exists, its tree holds
-#                       the ticked dial value, its commit has NO parent, and
-#                       quilt-read-dials prints alias:dial:value from it.
-#   P11 dials-only   -> the refs/quilt/dials tree contains no cell body
-#                       (or any non-dial) files — every path is
-#                       cells/<alias>/dials/<n> — while HEAD's tree does
-#                       carry bodies (so the check is not vacuous).
-#   P12 live ref     -> after a tick refs/quilt/HEAD exists; ls-tree shows
-#                       .quilt/live/last_receipt + .quilt/live/watch_tail
-#                       (with this tick's watch line inside);
-#                       `git ls-remote . refs/quilt/HEAD` answers locally.
+#   P7  notes        -> a tick also leaves a receipt NOTE on the commit
+#                       (git notes --ref=quilt/receipts): JSON with the full
+#                       commit hash, the alias, a 16-hex sig, byte-identical
+#                       to .quilt/receipts/<short>.json.
+#   P8  audit+ride   -> quilt-audit lists every noted cell commit's receipt;
+#                       file receipts do NOT cross a clone, noted ones DO
+#                       (quilt-init wires the fetch refspec) and the sig
+#                       still verifies in the clone.
+#   P9  tamper       -> rewriting a noted receipt with a wrong alias (git
+#                       notes add -f, sig kept) makes quilt-verify exit
+#                       non-zero, say MISMATCH, and name the commit.
 #
-# Pin ids continue the wave-3 sequence; P7–P9 live on a sibling lane.
 # Exit 0 iff all nine pin verdicts are PASS.
 
 set -u
@@ -287,115 +286,146 @@ pin_p6() {
   fi
 }
 
-# ---------------------------------------------------------------- P10
-pin_p10() {
-  local d v words out
-  if ! d=$(new_repo p10); then bad "P10-0 setup (quilt-init runnable?)"; return; fi
+# ---------------------------------------------------------------- P7
+pin_p7() {
+  local d full short
+  if ! d=$(new_repo p7); then bad "P7-0 setup (quilt-init runnable?)"; return; fi
   seed_cell "$d" a
 
-  if ( cd "$d" && ./.quilt/bin/quilt-tick a 3 0.37 ) >/dev/null 2>&1; then
-    ok "P10a tick (a dial3=0.37) committed"
+  if ( cd "$d" && ./.quilt/bin/quilt-tick a 3 0.77 ) >/dev/null 2>&1; then
+    ok "P7a tick commit accepted"
   else
-    bad "P10a tick failed"; return
+    bad "P7a tick commit failed"; return
   fi
-
-  if git -C "$d" rev-parse --verify --quiet refs/quilt/dials >/dev/null; then
-    ok "P10b refs/quilt/dials exists after tick"
-  else
-    bad "P10b refs/quilt/dials missing after tick"; return
-  fi
-  v=$(git -C "$d" show refs/quilt/dials:cells/a/dials/3 2>/dev/null | tr -d '[:space:]')
-  if [ "$v" = "0.37" ]; then
-    ok "P10c dials ref tree holds ticked value (a.dials/3 == 0.37)"
-  else
-    bad "P10c a.dials/3 in dials ref == '$v' (want 0.37)"
-  fi
-  # rev-list --parents prints "<commit> <parent>...": one word = no parent
-  words=$(git -C "$d" rev-list --parents -n 1 refs/quilt/dials | wc -w | tr -d '[:space:]')
-  if [ "$words" -eq 1 ]; then
-    ok "P10d dials ref commit has NO parent (orphan snapshot)"
-  else
-    bad "P10d dials ref commit has $((words - 1)) parent(s)"
-  fi
-  out=$( cd "$d" && ./.quilt/bin/quilt-read-dials refs/quilt/dials 2>&1 )
-  if printf '%s\n' "$out" | grep -qx 'a:3:0.37'; then
-    ok "P10e quilt-read-dials prints 'a:3:0.37' from the ref (no checkout)"
-  else
-    bad "P10e quilt-read-dials output lacks a:3:0.37: $out"
-  fi
-}
-
-# ---------------------------------------------------------------- P11
-pin_p11() {
-  local d paths non dial
-  if ! d=$(new_repo p11); then bad "P11-0 setup (quilt-init runnable?)"; return; fi
-  seed_cell "$d" a
-  seed_cell "$d" b
-  ( cd "$d" && ./.quilt/bin/quilt-tick a 5 0.5 ) >/dev/null 2>&1 \
-    || { bad "P11a tick failed"; return; }
-  ok "P11a tick (a dial5=0.5) committed"
-
-  if ! git -C "$d" rev-parse --verify --quiet refs/quilt/dials >/dev/null; then
-    bad "P11b refs/quilt/dials missing"; return
-  fi
-  # sanity: HEAD's tree DOES carry bodies, else "no bodies" is vacuous
-  if git -C "$d" ls-tree -r --name-only HEAD | grep -q '^cells/[^/]*/body$'; then
-    ok "P11b sanity: HEAD tree carries cell bodies (a, b)"
-  else
-    bad "P11b sanity: HEAD tree has no bodies — check vacuous"; return
-  fi
-
-  paths=$(git -C "$d" ls-tree -r --name-only refs/quilt/dials)
-  if printf '%s\n' "$paths" | grep -q '^cells/[^/]*/body$'; then
-    bad "P11c dials ref tree contains body files"
-  else
-    ok "P11c dials ref tree contains NO body files"
-  fi
-  non=$(printf '%s\n' "$paths" | grep -v -E '^cells/[^/]+/dials/[0-9]+$' || true)
-  if [ -z "$non" ]; then
-    dial=$(printf '%s\n' "$paths" | grep -c '^cells/[^/]\+/dials/[0-9]\+$' || true)
-    ok "P11d every path in dials ref is cells/<alias>/dials/<n> ($dial dial files)"
-  else
-    bad "P11d non-dial paths in dials ref: $(printf '%s' "$non" | tr '\n' ' ')"
-  fi
-}
-
-# ---------------------------------------------------------------- P12
-pin_p12() {
-  local d short paths want got
-  if ! d=$(new_repo p12); then bad "P12-0 setup (quilt-init runnable?)"; return; fi
-  seed_cell "$d" a
-  ( cd "$d" && ./.quilt/bin/quilt-tick a 2 0.66 ) >/dev/null 2>&1 \
-    || { bad "P12a tick failed"; return; }
-  ok "P12a tick (a dial2=0.66) committed"
+  full=$(git -C "$d" rev-parse HEAD)
   short=$(git -C "$d" rev-parse --short HEAD)
 
-  if git -C "$d" rev-parse --verify --quiet refs/quilt/HEAD >/dev/null; then
-    ok "P12b refs/quilt/HEAD exists after tick"
+  if git -C "$d" notes --ref=quilt/receipts show "$full" > "$SCRATCH/p7-note.json" 2>/dev/null; then
+    ok "P7b receipt note attached to the tick commit (refs/notes/quilt/receipts)"
   else
-    bad "P12b refs/quilt/HEAD missing after tick"; return
+    bad "P7b no receipt note on $full"; return
   fi
-  paths=$(git -C "$d" ls-tree -r --name-only refs/quilt/HEAD)
-  case "$paths" in
-    *.quilt/live/last_receipt*) ok "P12c ls-tree shows .quilt/live/last_receipt" ;;
-    *) bad "P12c last_receipt not in refs/quilt/HEAD tree: $paths" ;;
-  esac
-  case "$paths" in
-    *.quilt/live/watch_tail*) ok "P12d ls-tree shows .quilt/live/watch_tail" ;;
-    *) bad "P12d watch_tail not in refs/quilt/HEAD tree" ;;
-  esac
-  if git -C "$d" show refs/quilt/HEAD:.quilt/live/watch_tail 2>/dev/null \
-       | grep -q "tick $short "; then
-    ok "P12e watch_tail holds this tick's line (tick $short ...)"
+  if grep -qF "$full" "$SCRATCH/p7-note.json"; then
+    ok "P7c note JSON carries the full commit hash"
   else
-    bad "P12e watch_tail lacks the '$short' tick line"
+    bad "P7c note JSON lacks the commit hash"
   fi
-  want=$(git -C "$d" rev-parse refs/quilt/HEAD)
-  got=$(git -C "$d" ls-remote . refs/quilt/HEAD 2>/dev/null | awk '{print $1}')
-  if [ -n "$got" ] && [ "$got" = "$want" ]; then
-    ok "P12f git ls-remote . refs/quilt/HEAD answers ($want)"
+  if grep -q '"a"' "$SCRATCH/p7-note.json"; then
+    ok "P7d note JSON names cell a"
   else
-    bad "P12f ls-remote answered '$got' (want $want)"
+    bad "P7d note JSON lacks alias a"
+  fi
+  if grep -Eq '"sig": "[0-9a-f]{16}"' "$SCRATCH/p7-note.json"; then
+    ok "P7e note JSON carries a 16-hex sig"
+  else
+    bad "P7e note JSON lacks a 16-hex sig field"
+  fi
+  if cmp -s "$SCRATCH/p7-note.json" "$d/.quilt/receipts/$short.json"; then
+    ok "P7f note == .quilt/receipts/$short.json byte-for-byte"
+  else
+    bad "P7f note and file receipt differ"
+  fi
+}
+
+# ---------------------------------------------------------------- P8
+pin_p8() {
+  local d c full short out rc blocks
+  if ! d=$(new_repo p8); then bad "P8-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 5 0.5 ) >/dev/null 2>&1 \
+    || { bad "P8a first tick failed"; return; }
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 6 0.6 ) >/dev/null 2>&1 \
+    || { bad "P8b second tick failed"; return; }
+  full=$(git -C "$d" rev-parse HEAD)
+  short=$(git -C "$d" rev-parse --short HEAD)
+
+  out=$( cd "$d" && ./.quilt/bin/quilt-audit 2>&1 ); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "P8c quilt-audit runs (exit 0)"
+  else
+    bad "P8c quilt-audit exit=$rc: $out"; return
+  fi
+  blocks=$(printf '%s\n' "$out" | grep -c '^== ')
+  if [ "$blocks" -eq 3 ]; then          # seed + two ticks
+    ok "P8d audit lists every noted cell commit (3 blocks: seed + 2 ticks)"
+  else
+    bad "P8d audit listed $blocks block(s) (want 3)"
+  fi
+  if printf '%s\n' "$out" | grep -q "^== $short " \
+     && printf '%s\n' "$out" | grep -qF "$full"; then
+    ok "P8e audit shows the last tick's receipt ($short / $full)"
+  else
+    bad "P8e audit missing the last tick's receipt"
+  fi
+
+  # transport: file receipts never cross a clone; noted ones must
+  c="$SCRATCH/p8-clone"
+  git clone -q "$d" "$c" || { bad "P8f clone failed"; return; }
+  if [ ! -d "$c/.quilt/receipts" ]; then
+    ok "P8g file receipts did NOT cross the clone (as designed)"
+  else
+    bad "P8g receipts dir crossed the clone?"
+  fi
+  ( cd "$c" && ./.quilt/bin/quilt-init ) >/dev/null 2>&1 \
+    || { bad "P8h quilt-init failed in the clone"; return; }
+  if git -C "$c" notes --ref=quilt/receipts show "$full" >/dev/null 2>&1; then
+    ok "P8i receipt note crossed the clone after quilt-init (fetched from origin)"
+  else
+    bad "P8i receipt note absent in the clone"
+  fi
+  out=$( cd "$c" && ./.quilt/bin/quilt-audit 2>&1 )
+  if printf '%s\n' "$out" | grep -qF "$full"; then
+    ok "P8j audit in the clone lists the origin repo's tick receipt"
+  else
+    bad "P8j clone audit missing the origin tick receipt"
+  fi
+  if ( cd "$c" && ./.quilt/bin/quilt-verify ) >/dev/null 2>&1; then
+    ok "P8k quilt-verify passes in the clone (sig survives transport)"
+  else
+    bad "P8k quilt-verify failed in the clone"
+  fi
+}
+
+# ---------------------------------------------------------------- P9
+pin_p9() {
+  local d full short out rc
+  if ! d=$(new_repo p9); then bad "P9-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 2 0.25 ) >/dev/null 2>&1 \
+    || { bad "P9a tick failed"; return; }
+  full=$(git -C "$d" rev-parse HEAD)
+  short=$(git -C "$d" rev-parse --short HEAD)
+
+  if out=$( cd "$d" && ./.quilt/bin/quilt-verify 2>&1 ); then
+    ok "P9b verify clean before tampering ($out)"
+  else
+    bad "P9b verify already failing: $out"; return
+  fi
+
+  # tamper: rewrite the noted receipt with a wrong alias, keep the old sig
+  if git -C "$d" notes --ref=quilt/receipts show "$full" 2>/dev/null \
+     | sed 's/"a"/"mallory"/g' \
+     | git -C "$d" notes --ref=quilt/receipts add -f -F - "$full" 2>/dev/null; then
+    ok "P9c tampered note installed via git notes add -f (alias a -> mallory, sig kept)"
+  else
+    bad "P9c tamper via git notes add -f failed"; return
+  fi
+
+  out=$( cd "$d" && ./.quilt/bin/quilt-verify 2>&1 ); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ok "P9d verify exits non-zero after tamper (rc=$rc)"
+  else
+    bad "P9d verify accepted the tampered note (rc=0)"
+  fi
+  if printf '%s\n' "$out" | grep -qi 'mismatch'; then
+    ok "P9e verify says MISMATCH"
+  else
+    bad "P9e verify output lacks 'mismatch': $out"
+  fi
+  if printf '%s\n' "$out" | grep -q "$short"; then
+    ok "P9f verify names the tampered commit ($short)"
+  else
+    bad "P9f verify does not name $short: $out"
   fi
 }
 
@@ -410,34 +440,32 @@ main() {
   pin_p4
   pin_p5
   pin_p6
-  pin_p10
-  pin_p11
-  pin_p12
+  pin_p7
+  pin_p8
+  pin_p9
   say ""
   say "# ---- per-pin verdicts ----"
-  # FAILS is space-padded check ids (" P10c "); the [!0-9] keeps P1 from
-  # matching P10/P11/P12 ids.
-  local v1 v2 v3 v4 v5 v6 v10 v11 v12 n v
-  case "$FAILS" in *" P1"[!0-9]*)  v1=FAIL;;  *) v1=PASS;;  esac
-  case "$FAILS" in *" P2"[!0-9]*)  v2=FAIL;;  *) v2=PASS;;  esac
-  case "$FAILS" in *" P3"[!0-9]*)  v3=FAIL;;  *) v3=PASS;;  esac
-  case "$FAILS" in *" P4"[!0-9]*)  v4=FAIL;;  *) v4=PASS;;  esac
-  case "$FAILS" in *" P5"[!0-9]*)  v5=FAIL;;  *) v5=PASS;;  esac
-  case "$FAILS" in *" P6"[!0-9]*)  v6=FAIL;;  *) v6=PASS;;  esac
-  case "$FAILS" in *" P10"[!0-9]*) v10=FAIL;; *) v10=PASS;; esac
-  case "$FAILS" in *" P11"[!0-9]*) v11=FAIL;; *) v11=PASS;; esac
-  case "$FAILS" in *" P12"[!0-9]*) v12=FAIL;; *) v12=PASS;; esac
+  local v1 v2 v3 v4 v5 v6 v7 v8 v9 n
+  case "$FAILS" in *" P1"*) v1=FAIL;; *) v1=PASS;; esac
+  case "$FAILS" in *" P2"*) v2=FAIL;; *) v2=PASS;; esac
+  case "$FAILS" in *" P3"*) v3=FAIL;; *) v3=PASS;; esac
+  case "$FAILS" in *" P4"*) v4=FAIL;; *) v4=PASS;; esac
+  case "$FAILS" in *" P5"*) v5=FAIL;; *) v5=PASS;; esac
+  case "$FAILS" in *" P6"*) v6=FAIL;; *) v6=PASS;; esac
+  case "$FAILS" in *" P7"*) v7=FAIL;; *) v7=PASS;; esac
+  case "$FAILS" in *" P8"*) v8=FAIL;; *) v8=PASS;; esac
+  case "$FAILS" in *" P9"*) v9=FAIL;; *) v9=PASS;; esac
   say "P1 receipt+watch on dial commit : $v1"
   say "P2 freeze enforcement          : $v2"
   say "P3 cascade                      : $v3"
   say "P4 rewind                       : $v4"
   say "P5 clone needs quilt-init       : $v5"
   say "P6 non-cell commit silent       : $v6"
-  say "P10 refs/quilt/dials snapshot   : $v10"
-  say "P11 dials-only tree             : $v11"
-  say "P12 refs/quilt/HEAD live state  : $v12"
+  say "P7 receipt note on tick commit  : $v7"
+  say "P8 audit + receipts ride clone  : $v8"
+  say "P9 tampered note detected       : $v9"
   n=0
-  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6" "$v10" "$v11" "$v12"; do
+  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6" "$v7" "$v8" "$v9"; do
     [ "$v" = PASS ] && n=$((n+1))
   done
   say ""

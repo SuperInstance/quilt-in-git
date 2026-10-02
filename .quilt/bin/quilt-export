@@ -1,0 +1,46 @@
+#!/bin/sh
+# quilt-export <path.bundle> — write the whole quilt into one file.
+#
+#   git bundle create <path> HEAD <branch> [refs/quilt/* ...]
+#
+# A COMPLETE bundle (no prerequisites): the far side needs nothing but git
+# and the file — no remote, no network, no shared filesystem. The branch,
+# HEAD, and every refs/quilt/* ref travel inside; the journal
+# (.quilt/receipts/, watch.log) travels as ordinary committed content —
+# fold it in first (`git add .quilt && git commit`) and the far side can
+# verify its regenerated journal against what you actually observed. If
+# you don't, quilt-import simply regenerates the journal from history.
+#
+# This is the sneakernet/sync surface for agents that never share a
+# remote: export, hand the file over any medium, import.
+
+set -e
+
+[ $# -eq 1 ] || { echo "usage: quilt-export <path.bundle>" >&2; exit 2; }
+OUT=$1
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) \
+  || { echo "quilt-export: not inside a git repository" >&2; exit 1; }
+cd "$ROOT"
+
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) \
+  || { echo "quilt-export: detached HEAD, refusing to guess the branch" >&2; exit 1; }
+
+REFS="HEAD refs/heads/$BRANCH"
+QREFS=$(git for-each-ref --format='%(refname)' refs/quilt/)
+[ -n "$QREFS" ] && REFS="$REFS $QREFS"
+
+if ! git diff --quiet HEAD -- .quilt 2>/dev/null \
+   || [ -n "$(git ls-files --others --exclude-standard -- .quilt)" ]; then
+  echo "quilt-export: note: journal has uncommitted state — 'git add .quilt && git commit' folds it in" >&2
+  echo "quilt-export: note: (import regenerates the journal from history either way)" >&2
+fi
+
+git bundle create "$OUT" $REFS >/dev/null
+git bundle verify "$OUT" >/dev/null 2>&1 \
+  || { echo "quilt-export: bundle failed verification: $OUT" >&2; exit 1; }
+
+NCOMMITS=$(git rev-list --count "$BRANCH")
+NQ=$(printf '%s\n' $QREFS | grep -c . || true)
+[ -z "$QREFS" ] && NQ=0
+echo "quilt: exported $BRANCH ($NCOMMITS commits, complete bundle) + $NQ refs/quilt/* -> $OUT"

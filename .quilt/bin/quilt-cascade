@@ -1,47 +1,68 @@
 #!/bin/sh
 # quilt-cascade — recompute ENTANGLEMENT (dial 14) for every cell with links.
 #
-# For each non-comment line "<src> <weight>" in cells/<alias>/links:
-#     candidate = (cells/<src>/dials/1) * weight
-# (a missing source cell or dial counts as 0), then
-#     cells/<alias>/dials/14 = max(candidates), rounded to 4 decimals via awk.
+# Focus-safe since w3c: reads the INDEX (`git show :cells/...`), never the
+# worktree, so the cascade still sees every cell's dial 1 even in a sparse
+# (quilt-focus) worktree where other cells' files are not materialized.
+# The wave-2 version globbed the worktree — under focus it silently saw
+# only the focused cell and zeroed the rest; that claim was tested, found
+# false, and this is the fix (pin P14).
 #
-# Deterministic: cells are visited in glob (sorted) order, one pass, each
-# cell's value depends only on its links file and the sources' dial 1 (no
-# transitive propagation). A value is rewritten only when numerically
-# different, so a settled cascade leaves the tree untouched and generates no
-# cascade commit.
+# Writes, per cell whose dial 14 numerically changes:
+#   materialized cell  -> worktree file + git add (a nudge you can see)
+#   sparse cell        -> git hash-object + update-index --cacheinfo
+#                         + update-index --skip-worktree (an index-only
+#                         nudge: the value rides the next commit's tree
+#                         without touching the focused worktree). The
+#                         skip-worktree re-apply matters — --cacheinfo
+#                         alone clears the bit and leaves a phantom
+#                         deletion in the worktree.
+#
+# Determinism unchanged: links enumerated from the index in sorted order,
+# one pass, dial 14 = max(src dial 1 × weight) over links lines, missing
+# sources count as 0, rewritten only when numerically different.
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
 cd "$ROOT" || exit 1
 
-for links in cells/*/links; do
-  [ -f "$links" ] || continue
+for links in $(git ls-files -- 'cells/*/links' | sort); do
   alias=${links#cells/}
   alias=${alias%/links}
 
-  new=$(awk '
+  new=$(git show ":$links" 2>/dev/null | awk '
     /^[[:space:]]*#/ { next }        # comments
     /^[[:space:]]*$/ { next }        # blank lines
     NF >= 2 {
       src = $1; w = $2 + 0
       v = 0
-      fn = "cells/" src "/dials/1"
-      if ((getline line < fn) > 0) {
+      cmd = "git show :cells/" src "/dials/1 2>/dev/null"
+      if ((cmd | getline line) > 0) {
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
         v = line + 0
       }
-      close(fn)
+      close(cmd)
       val = v * w
       if (!seen || val > max) { max = val; seen = 1 }
     }
     END { if (!seen) max = 0; printf "%.4f", max }
-  ' "$links")
+  ')
 
-  cur=$(tr -d '[:space:]' < "cells/$alias/dials/14" 2>/dev/null)
+  cur=$(git show ":cells/$alias/dials/14" 2>/dev/null | tr -d '[:space:]')
   cur=${cur:-0}
   awk -v a="$cur" -v b="$new" 'BEGIN{exit !(a + 0 == b + 0)}' \
-    || printf '%s\n' "$new" > "cells/$alias/dials/14"
+    || {
+      if git ls-files -v -- "$links" | grep -q '^H'; then
+        # cell materialized in this worktree — ordinary file nudge
+        mkdir -p "cells/$alias/dials"
+        printf '%s\n' "$new" > "cells/$alias/dials/14"
+        git add "cells/$alias/dials/14"
+      else
+        # sparse cell — stage the blob without disturbing the worktree
+        sha=$(printf '%s\n' "$new" | git hash-object -w --stdin)
+        git update-index --cacheinfo 100644,"$sha","cells/$alias/dials/14"
+        git update-index --skip-worktree "cells/$alias/dials/14"
+      fi
+    }
 done
 
 exit 0

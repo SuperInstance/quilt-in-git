@@ -1,0 +1,45 @@
+#!/bin/sh
+# quilt-fnv1a — fnv1a-64 checksum of stdin, printed as 16 lowercase hex chars.
+#
+# Pure awk, no gawk-isms: the 64-bit state is carried as two exact 32-bit
+# halves so every intermediate product stays below 2^53 (doubles stay
+# exact); the per-byte XOR is done bit by bit (POSIX awk has no xor()).
+# Multiplied by the FNV prime 0x100000001b3 as 435 + 2^40 so each partial
+# term fits a double. The input's trailing newline (if any) is ignored, so
+# callers may pipe with or without one — quilt-receipt (sign) and
+# quilt-verify (recheck) share this helper and therefore agree byte for
+# byte. Validated against the reference vectors: "" -> cbf29ce484222325,
+# "a" -> af63dc4c8601ec8c, "foobar" -> 85944171f73967e8.
+
+LC_ALL=C awk '
+function x32(a, b,    r, i) {           # low 32 bits of a XOR b
+  r = 0
+  for (i = 0; i < 32; i += 1) {
+    if (a % 2 != b % 2) r += 2 ^ i
+    a = int(a / 2); b = int(b / 2)
+  }
+  return r
+}
+function fnv(hi, lo, s,    i, b, p, r24, A, m, B, clo, chi, nlo, nhi) {
+  for (i = 1; i <= length(s); i += 1) {
+    b = ord[substr(s, i, 1)] + 0
+    lo = x32(lo, b)                       # hash ^= byte
+    # (hi:lo) * 0x100000001b3 mod 2^64, split so all terms stay < 2^53
+    p   = 435 * lo                        # 435*lo           < 2^41
+    r24 = lo - int(lo / 16777216) * 16777216
+    A   = r24 * 256                       # (lo mod 2^24)<<8 < 2^32
+    m   = 435 * hi                        # 435*hi           < 2^41
+    B   = m  - int(m  / 4294967296) * 4294967296
+    clo = p  - int(p  / 4294967296) * 4294967296
+    chi = int(p / 4294967296)             # < 2^9
+    nlo = clo
+    nhi = A + B + chi
+    nhi = nhi - int(nhi / 4294967296) * 4294967296
+    hi = nhi; lo = nlo
+  }
+  return sprintf("%08x%08x", hi, lo)
+}
+BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i }
+{ buf = buf $0 "\n" }
+END   { sub(/\n$/, "", buf); print fnv(3421674724, 2216829733, buf) }
+'

@@ -1,0 +1,14 @@
+# quilt-in-git w3c pins  src=/tmp/zlanes2/laneI/wt
+# scratch=/tmp/quilt-pins-w3c-syceo0  git=2.43.0
+
+FAIL P13a quilt-export failed (or empty bundle)
+FAIL P14a quilt-focus a failed
+FAIL P15a focus did not remove cells/b/body
+
+# ---- per-pin verdicts ----
+P13 bundle air-gap round-trip   : FAIL
+P14 sparse focus isolates organ : FAIL
+P15 focus --off restores body   : FAIL
+
+PINS: 0/3 pins pass (0 checks pass, 3 checks fail)
+PINS: FAILURES PRESENT (scratch kept for inspection: /tmp/quilt-pins-w3c-syceo0)

@@ -60,6 +60,18 @@ git checkout <old-hash> -- cells/auth/           # rewind just that organ
 git ls-remote origin 'refs/quilt/*'              # refs answer: no clone needed
 git fetch origin refs/quilt/dials                # every dial, kilobytes only
 .quilt/bin/quilt-read-dials FETCH_HEAD           # "auth:1:0.11" per line
+.quilt/bin/quilt-audit      print every cell commit's receipt from NOTES
+.quilt/bin/quilt-cascade    recompute dial 14 from links (reads the index)
+.quilt/bin/quilt-export     write the whole quilt to a git bundle (one file)
+.quilt/bin/quilt-export /usb/quilt.bundle   # complete bundle: no prereqs
+.quilt/bin/quilt-fnv1a      fnv1a-64 of stdin (16 hex) — the sig primitive
+.quilt/bin/quilt-focus      sparse-checkout ONE cell + .quilt/ (--off undoes)
+.quilt/bin/quilt-focus --off   # full body back, nothing lost
+.quilt/bin/quilt-focus auth    # worktree = cells/auth/ + .quilt/ only
+.quilt/bin/quilt-import     land a bundle in a clone: refs + hooks + journal
+.quilt/bin/quilt-import /usb/quilt.bundle
+.quilt/bin/quilt-receipt    write .quilt/receipts/<short>.json (with sig)
+.quilt/bin/quilt-verify     recompute every noted receipt's sig; flag drift
 ```
 
 Or with the helper: `.quilt/bin/quilt-tick auth 0 0.42`.
