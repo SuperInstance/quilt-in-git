@@ -1,0 +1,37 @@
+# quilt-in-git wave-4 query pins  src=/root/.openclaw/workspace/quilt-in-git
+# scratch=/tmp/quilt-qpins-4GhgRj  git=2.43.0
+
+PASS Q1a trusted-but-unaudited rc=0 (unaudited results exist)
+PASS Q1b seed commit listed
+PASS Q1c tick commit listed
+PASS Q1d exactly 2 data lines
+PASS Q1e attest auditor1 HEAD~2 rc=0
+PASS Q1f refs/quilt/audit/auditor1 resolves
+PASS Q1g post-attest: tick listed, seed covered
+PASS Q1h --anchor HEAD rc=1, zero data lines (all audited)
+PASS Q1i queries are read-only (for-each-ref unchanged)
+PASS Q1j re-attest same position is idempotent (same tip 5c50f05873b924c25aaddd0631fad1ac4f78a44e)
+PASS Q2a coverage cells/a rc=0
+PASS Q2b entry a1b2c3 reported
+PASS Q2c entry d4e5f6 (other path) absent
+PASS Q2d receipted commit marked covered-by:a1b2c3
+PASS Q2e coverage cells/zzz rc=1 (no entries)
+PASS Q2f dirty working-tree LEDGER.md invisible (no ffffff)
+quilt-query: no LEDGER.md at HEAD~1 (HEAD~1)
+PASS Q2g --ref HEAD~1 (no LEDGER.md) rc=2
+PASS Q3a divergence qA qB rc=1 (differences found)
+PASS Q3b cells/a/dials/3 reported
+PASS Q3c cells/b/dials/9 reported
+PASS Q3d unchanged dial 0 not reported
+PASS Q3e value transition 0.0 -> 0.7 shown
+PASS Q3f divergence qB qB rc=0 (identical)
+PASS Q3g refs/quilt/dials snapshot gives identical dial path set
+
+# ---- per-pin verdicts ----
+Q1 trusted-but-unaudited + attest : PASS
+Q2 coverage (LEDGER intersection) : PASS
+Q3 divergence (dial diff)         : PASS
+
+PINS: 3/3 pins pass (24 checks pass, 0 checks fail)
+PINS: ALL PASS
+exit=0

@@ -1,0 +1,386 @@
+#!/bin/sh
+# quilt-query — wave-4 verifiable-coverage query layer.
+#
+#   .quilt/bin/quilt-query trusted-but-unaudited [--ref R] [--anchor A]
+#   .quilt/bin/quilt-query coverage <needle> [--ref R]
+#   .quilt/bin/quilt-query divergence <refA> <refB>
+#   .quilt/bin/quilt-query attest <agent> [ref]
+#
+# Answers cf-native-backend design question #3 ("what does 'show me
+# everything currently trusted-but-unaudited' look like as an API?") as a
+# read-mostly CLI over ordinary git content. "Trusted" below always means
+# RECEIPTED-IN-TREE: a commit is trusted iff a hook-format receipt for it is
+# committed at the queried ref and the named commit is reachable from that
+# ref. Nothing here decides whether receipted claims are TRUE — see the
+# honest limits at the bottom and RESULT.md.
+#
+# Subcommands (all read-only EXCEPT attest; exit 2 on usage errors):
+#
+#   trusted-but-unaudited
+#       Receipted commits at --ref (default HEAD) that no attested auditor
+#       position covers. Coverage is is-ancestor order: a receipted commit
+#       is audited iff it is an ancestor of (or equal to) some anchor
+#       position. Anchors come from refs/quilt/audit/* by default, or from
+#       --anchor <rev> (a commit position) directly. Output is in rev-list
+#       receipt order (newest position first):
+#           # trusted-but-unaudited @ HEAD (abc1234)
+#           # anchors: none ...
+#           <short> <cells-touched> <receipt-path>
+#       One line per unaudited commit. Exit 0 if any line is printed, 1 if
+#       everything receipted is audited (or nothing is receipted).
+#
+#   coverage <needle>
+#       Intersects the committed doubt ledger (LEDGER.md at --ref, default
+#       HEAD) with the receipted commit set. Prints the matching ledger
+#       entries, then every receipted commit whose touched paths contain
+#       <needle>, each annotated covered-by:<entry-id> when one of the
+#       matching entries' paths intersects a touched path (substring match,
+#       either direction — see honest limits). Exit 0 if entries match,
+#       1 if none, 2 if no LEDGER.md exists at the ref. The ledger is read
+#       from the COMMITTED tree: uncommitted edits are invisible.
+#
+#   divergence <refA> <refB>
+#       Diffs the committed dial files (cells/<alias>/dials/<N> only — not
+#       body/links) between two refs: branches, hashes, or snapshot refs
+#       such as refs/quilt/dials. Prints one line per differing dial:
+#           <path>: <valueA> -> <valueB>
+#       with "-" for a dial present on only one side. Exit 1 on any
+#       difference, 0 on identity. Values are the blob contents trimmed.
+#
+#   attest <agent> [ref]
+#       The ONLY write in the layer, deliberately a separate subcommand:
+#       records that <agent> audited everything receipted up to <ref>
+#       (default HEAD). Writes a parentless receipt commit carrying
+#       .quilt/audit/<agent>.json {agent, position, ref, audited_receipts,
+#       count, ts} and points refs/quilt/audit/<agent> at it. ts and the
+#       author/committer dates are the POSITION's commit times — never
+#       wall clock — so re-attesting the same position is idempotent
+#       (same hash). <agent> must match [A-Za-z0-9._-]+.
+#
+# Honest limits (see RESULT.md): this layer audits which receipts EXIST and
+# which positions an auditor CLAIMED to cover, not whether the receipted
+# claims are TRUE. Receipts still sitting in the working tree (never
+# committed) are invisible to it.
+
+set -u
+
+PROG=quilt-query
+
+die() { echo "$PROG: $*" >&2; exit 2; }
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
+cd "$ROOT" || die "cannot cd to $ROOT"
+
+short() { git rev-parse --short "$1"; }
+
+# ---------------------------------------------------------------- shared
+# receipted_commits <ref> — lines "<fullhash> <receipt-path>" for every
+# receipt in <ref>'s committed tree whose named commit is reachable from
+# <ref>. Sorted by hash for determinism.
+receipted_commits() {
+  git ls-tree -r --name-only "$1" -- .quilt/receipts/ 2>/dev/null \
+  | while IFS= read -r p; do
+      h=$(git show "$1:$p" 2>/dev/null \
+          | sed -n 's/^  "commit": "\([0-9a-f]\{40\}\)",\{0,1\}$/\1/p')
+      [ -n "$h" ] || continue
+      if git merge-base --is-ancestor "$h" "$1" 2>/dev/null; then
+        printf '%s %s\n' "$h" "$p"
+      fi
+    done | sort
+}
+
+# cells_touched <commit> — comma-joined aliases under cells/ touched by the
+# commit, read from the commit itself (not the working tree).
+cells_touched() {
+  git diff-tree --root --no-commit-id --name-only -r "$1" -- cells/ \
+    | cut -d/ -f2 | sort -u | paste -sd, -
+}
+
+# entry_id / entry_path — field extraction from a LEDGER.md doubt line.
+entry_id() { printf '%s' "$1" | sed 's/^- doubt \([^ ]*\).*/\1/'; }
+entry_path() { printf '%s' "$1" | sed 's/.*| path: \([^ |]*\).*/\1/'; }
+
+# audit_positions [anchor] — lines "<position-hash> <source-ref>". With an
+# explicit anchor: that single position. Without: every refs/quilt/audit/*
+# ref (position field of the attestation receipt when present, else the
+# ref tip itself).
+audit_positions() {
+  if [ $# -eq 1 ]; then
+    git rev-parse --verify --quiet "$1^{commit}" >/dev/null \
+      || die "anchor '$1' is not a commit"
+    printf '%s %s\n' "$(git rev-parse "$1")" "$1"
+    return
+  fi
+  git for-each-ref --format='%(refname)' refs/quilt/audit/ \
+  | while IFS= read -r r; do
+      agent=${r#refs/quilt/audit/}
+      pos=$(git show "$r:.quilt/audit/$agent.json" 2>/dev/null \
+            | sed -n 's/^  "position": "\([0-9a-f]\{40\}\)",\{0,1\}$/\1/p')
+      [ -n "$pos" ] || pos=$(git rev-parse "$r")
+      printf '%s %s\n' "$pos" "$r"
+    done
+}
+
+# ---------------------------------------------------------------- tbu
+cmd_tbu() {
+  ref=HEAD; anchor=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --ref)    [ $# -ge 2 ] || die "--ref needs a value"; ref=$2; shift 2 ;;
+      --anchor) [ $# -ge 2 ] || die "--anchor needs a value"; anchor=$2; shift 2 ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+  git rev-parse --verify --quiet "$ref^{commit}" >/dev/null \
+    || die "ref '$ref' is not a commit"
+
+  RCPT=$(mktemp "${TMPDIR:-/tmp}/quilt-query.XXXXXX") || exit 2
+  ANCH=$(mktemp "${TMPDIR:-/tmp}/quilt-query.XXXXXX") || { rm -f "$RCPT"; exit 2; }
+  trap 'rm -f "$RCPT" "$ANCH"' EXIT INT TERM
+
+  receipted_commits "$ref" > "$RCPT"
+  if [ -n "$anchor" ]; then
+    audit_positions "$anchor" > "$ANCH"
+  else
+    audit_positions > "$ANCH"
+  fi
+
+  printf '# trusted-but-unaudited @ %s (%s)\n' "$ref" "$(short "$ref")"
+  if [ -s "$ANCH" ]; then
+    while IFS= read -r line; do
+      printf '# anchor %s -> %s\n' "${line#* }" "$(short "${line%% *}")"
+    done < "$ANCH"
+  else
+    printf '# anchors: none (no refs/quilt/audit/* — nothing has been attested)\n'
+  fi
+
+  found=0
+  # rev-list receipt order (newest position first), restricted to
+  # receipted commits; deterministic for a fixed ref.
+  while IFS= read -r c; do
+    line=$(awk -v c="$c" '$1==c{print; exit}' "$RCPT")
+    [ -n "$line" ] || continue
+    audited=0
+    while IFS= read -r aline; do
+      if git merge-base --is-ancestor "$c" "${aline%% *}" 2>/dev/null; then
+        audited=1; break
+      fi
+    done < "$ANCH"
+    if [ "$audited" -eq 0 ]; then
+      printf '%s %s %s\n' "$(short "$c")" "$(cells_touched "$c")" "${line#* }"
+      found=1
+    fi
+  done <<EOF
+$(git rev-list "$ref")
+EOF
+
+  rm -f "$RCPT" "$ANCH"; trap - EXIT INT TERM
+  [ "$found" -eq 1 ]
+}
+
+# ---------------------------------------------------------------- coverage
+cmd_coverage() {
+  [ $# -ge 1 ] || die "coverage needs a <needle>"
+  needle=$1; shift; ref=HEAD
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --ref) [ $# -ge 2 ] || die "--ref needs a value"; ref=$2; shift 2 ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+  git rev-parse --verify --quiet "$ref^{commit}" >/dev/null \
+    || die "ref '$ref' is not a commit"
+  ledger=$(git show "$ref:LEDGER.md" 2>/dev/null) \
+    || die "no LEDGER.md at $ref ($ref)"
+
+  printf '# coverage %s @ %s (%s)\n' "$needle" "$ref" "$(short "$ref")"
+  matches=$(printf '%s\n' "$ledger" | grep '^- doubt ' | grep -F -e "$needle") || true
+  if [ -z "$matches" ]; then
+    printf 'entries: 0\n'
+    exit 1
+  fi
+  printf 'entries: %s\n' "$(printf '%s\n' "$matches" | grep -c .)"
+  printf '%s\n' "$matches" | while IFS= read -r e; do
+    st=$(printf '%s' "$e" | sed 's/.*| status: \([^ |]*\).*/\1/')
+    stopped=$(printf '%s' "$e" | sed 's/.*| stopped: \([^ |]*\).*/\1/')
+    cov=$(printf '%s' "$e" | sed 's/.*| covered_by: \([^ |]*\).*/\1/')
+    rev=$(printf '%s' "$e" | sed 's/.*| revisit: \([^ |]*\).*/\1/')
+    printf '  %s [%s] path=%s stopped="%s" covered_by="%s" revisit="%s"\n' \
+      "$(entry_id "$e")" "$st" "$(entry_path "$e")" "$stopped" "$cov" "$rev"
+  done
+
+  # cross-reference: receipted commits touching <needle>, annotated with
+  # the entries whose paths intersect a touched path (substring, either
+  # direction — see honest limits).
+  RCPT=$(mktemp "${TMPDIR:-/tmp}/quilt-query.XXXXXX") || exit 2
+  trap 'rm -f "$RCPT"' EXIT INT TERM
+  receipted_commits "$ref" > "$RCPT"
+  printf 'receipted commits touching %s:\n' "$needle"
+  cross=$(
+    while IFS= read -r c; do
+      line=$(awk -v c="$c" '$1==c{print; exit}' "$RCPT")
+      [ -n "$line" ] || continue
+      touched=$(git diff-tree --root --no-commit-id --name-only -r "$c" -- cells/)
+      printf '%s\n' "$touched" | grep -qF -e "$needle" || continue
+      covids=$(
+        printf '%s\n' "$touched" | while IFS= read -r t; do
+          printf '%s\n' "$matches" | while IFS= read -r e; do
+            ep=$(entry_path "$e")
+            case "$t" in
+              *"$ep"*) entry_id "$e" ;;
+              *) case "$ep" in
+                   *"$t"*) entry_id "$e" ;;
+                 esac ;;
+            esac
+          done
+        done | sort -u | paste -sd, -
+      )
+      if [ -n "$covids" ]; then
+        printf '  %s %s %s covered-by:%s\n' \
+          "$(short "$c")" "$(cells_touched "$c")" "${line#* }" "$covids"
+      else
+        printf '  %s %s %s uncovered\n' \
+          "$(short "$c")" "$(cells_touched "$c")" "${line#* }"
+      fi
+    done <<EOF
+$(git rev-list "$ref")
+EOF
+  )
+  if [ -n "$cross" ]; then
+    printf '%s\n' "$cross"
+  else
+    printf '  (none)\n'
+  fi
+  rm -f "$RCPT"; trap - EXIT INT TERM
+  exit 0
+}
+
+# ---------------------------------------------------------------- divergence
+dials_of() { # dials_of <ref> — lines "<path> <blob-sha>" for dial files only
+  git ls-tree -r "$1" -- cells/ \
+  | awk '$2=="blob" && $4 ~ /^cells\/[^\/]+\/dials\/[0-9]+$/ {print $4, $3}' \
+  | sort
+}
+
+cmd_divergence() {
+  [ $# -eq 2 ] || die "divergence needs <refA> <refB>"
+  A=$1; B=$2
+  git rev-parse --verify --quiet "$A^{commit}" >/dev/null \
+    || die "refA '$A' is not a commit"
+  git rev-parse --verify --quiet "$B^{commit}" >/dev/null \
+    || die "refB '$B' is not a commit"
+
+  TA=$(mktemp "${TMPDIR:-/tmp}/quilt-query.XXXXXX") || exit 2
+  TB=$(mktemp "${TMPDIR:-/tmp}/quilt-query.XXXXXX") || { rm -f "$TA"; exit 2; }
+  trap 'rm -f "$TA" "$TB"' EXIT INT TERM
+  dials_of "$A" > "$TA"
+  dials_of "$B" > "$TB"
+
+  printf '# divergence %s (%s) vs %s (%s)\n' "$A" "$(short "$A")" "$B" "$(short "$B")"
+  diffs=$(awk 'NR==FNR{a[$1]=$2;next}{b[$1]=$2}
+    END{
+      for(p in a) if(!(p in b)) print p, a[p], "-";
+      for(p in b) if(!(p in a)) print p, "-", b[p];
+      for(p in a) if((p in b) && a[p]!=b[p]) print p, a[p], b[p];
+    }' "$TA" "$TB" | sort)
+  if [ -z "$diffs" ]; then
+    printf '# no dial differences\n'
+    rm -f "$TA" "$TB"; trap - EXIT INT TERM
+    exit 0
+  fi
+  printf '%s\n' "$diffs" | while IFS= read -r row; do
+    p=${row%% *}; rest=${row#* }; sa=${rest%% *}; sb=${rest#* }
+    va=-; vb=-
+    [ "$sa" != "-" ] && va=$(git cat-file blob "$sa" | tr -d '[:space:]')
+    [ "$sb" != "-" ] && vb=$(git cat-file blob "$sb" | tr -d '[:space:]')
+    printf '%s: %s -> %s\n' "$p" "$va" "$vb"
+  done
+  rm -f "$TA" "$TB"; trap - EXIT INT TERM
+  exit 1
+}
+
+# ---------------------------------------------------------------- attest
+cmd_attest() {
+  [ $# -ge 1 ] || die "attest needs <agent> [ref]"
+  agent=$1; ref=${2:-HEAD}
+  case $agent in
+    *[!A-Za-z0-9._-]*|"") die "bad agent name '$agent' (want [A-Za-z0-9._-]+)" ;;
+  esac
+  pos=$(git rev-parse --verify --quiet "$ref^{commit}") \
+    || die "ref '$ref' is not a commit"
+
+  RCPT=$(mktemp "${TMPDIR:-/tmp}/quilt-query.XXXXXX") || exit 2
+  trap 'rm -f "$RCPT"' EXIT INT TERM
+  receipted_commits "$pos" > "$RCPT"
+  n=$(awk 'END{print NR+0}' "$RCPT")
+  list=$(awk '{printf "%s\"%s\"", (NR>1?", ":""), $1}' "$RCPT")
+  ts=$(git log -1 --format=%ct "$pos")
+
+  JSON=$(mktemp "${TMPDIR:-/tmp}/quilt-query.XXXXXX") || { rm -f "$RCPT"; exit 2; }
+  {
+    printf '{\n'
+    printf '  "agent": "%s",\n' "$agent"
+    printf '  "position": "%s",\n' "$pos"
+    printf '  "ref": "%s",\n' "$ref"
+    printf '  "audited_receipts": [%s],\n' "$list"
+    printf '  "count": %s,\n' "$n"
+    printf '  "ts": %s\n' "$ts"
+    printf '}\n'
+  } > "$JSON"
+
+  # parentless receipt commit via a private index — never touches HEAD,
+  # the working tree, or the current index. Dates pinned to the POSITION's
+  # commit times (never wall clock) so same-position re-attest is
+  # byte-identical (idempotent).
+  GD=$(cd .git && pwd)
+  IDX=$(mktemp "$GD/quilt-query.XXXXXX") || { rm -f "$RCPT" "$JSON"; exit 2; }
+  GIT_INDEX_FILE=$IDX git read-tree --empty
+  blob=$(git hash-object -w "$JSON")
+  GIT_INDEX_FILE=$IDX git update-index --add \
+    --cacheinfo "100644,$blob,.quilt/audit/$agent.json"
+  tree=$(GIT_INDEX_FILE=$IDX git write-tree)
+  rm -f "$IDX" "$RCPT" "$JSON"
+  AD=$(git log -1 --format=%aI "$pos")
+  CD=$(git log -1 --format=%cI "$pos")
+  cmt=$(printf 'quilt: audit %s at %s (%s receipted commits)\n' \
+          "$agent" "$(short "$pos")" "$n" \
+        | env GIT_AUTHOR_NAME=quilt-audit GIT_AUTHOR_EMAIL=audit@quilt.local \
+              GIT_AUTHOR_DATE="$AD" \
+              GIT_COMMITTER_NAME=quilt-audit GIT_COMMITTER_EMAIL=audit@quilt.local \
+              GIT_COMMITTER_DATE="$CD" git commit-tree "$tree")
+  git update-ref "refs/quilt/audit/$agent" "$cmt"
+  trap - EXIT INT TERM
+  printf 'attested %s -> %s (%s receipted commits; receipt %s)\n' \
+    "refs/quilt/audit/$agent" "$(short "$pos")" "$n" "$(short "$cmt")"
+}
+
+# ---------------------------------------------------------------- main
+usage() {
+  cat <<'EOF'
+usage: quilt-query <command> [args]
+
+  trusted-but-unaudited [--ref R] [--anchor A]
+      receipted commits no audit position covers (is-ancestor order).
+      rc=0 results, 1 none.
+  coverage <needle> [--ref R]
+      doubt-ledger (LEDGER.md) entries matching <needle> crossed with
+      receipted commits touching it. rc=0 entries, 1 none, 2 no LEDGER.md.
+  divergence <refA> <refB>
+      diff committed dial files between two refs.
+      rc=1 differences, 0 identity.
+  attest <agent> [ref]
+      record that <agent> audited everything receipted up to ref.
+      Writes refs/quilt/audit/<agent> (idempotent per position).
+EOF
+}
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+cmd=$1; shift
+case $cmd in
+  trusted-but-unaudited) cmd_tbu "$@" ;;
+  coverage)              cmd_coverage "$@" ;;
+  divergence)            cmd_divergence "$@" ;;
+  attest)                cmd_attest "$@" ;;
+  help|--help|-h)        usage ;;
+  *)                     usage >&2; die "unknown command: $cmd" ;;
+esac

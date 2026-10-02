@@ -1,0 +1,15 @@
+# quilt-in-git wave-4 query pins  src=/root/.openclaw/workspace/quilt-in-git
+# scratch=/tmp/quilt-qpins-j0SaCB  git=2.43.0
+
+FAIL Q1-0 quilt-query missing/not executable
+FAIL Q2-0 quilt-query missing/not executable
+FAIL Q3-0 quilt-query missing/not executable
+
+# ---- per-pin verdicts ----
+Q1 trusted-but-unaudited + attest : FAIL
+Q2 coverage (LEDGER intersection) : FAIL
+Q3 divergence (dial diff)         : FAIL
+
+PINS: 0/3 pins pass (0 checks pass, 3 checks fail)
+PINS: FAILURES PRESENT (scratch kept for inspection: /tmp/quilt-qpins-j0SaCB)
+exit=1
