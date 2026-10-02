@@ -14,13 +14,13 @@ are marked **INFERRED**. No backend design appears here; each section closes
 with what a user gains and loses.
 
 **Section index.**
-1. Jujutsu: working-copy-as-commit, change vs commit, undo
-2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale
+1. Jujutsu: working-copy-as-commit, change vs commit, undo — *PENDING (research quota exhausted Oct 2; background sections 1/2/4/6/7 unfetched)*
+2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale — *PENDING (same)*
 3. CRDTs: Automerge and Yjs vs dials-as-files
-4. git worktree orchestration precedents
+4. git worktree orchestration precedents — *PENDING (same)*
 5. Cloudflare Artifacts + Workers platform capabilities
-6. Agent-native git experiments, today
-7. Synthesis table: what quilt-in-git should steal
+6. Agent-native git experiments, today — *PENDING (same)*
+7. Synthesis table: what quilt-in-git should steal — *PENDING (same)*
 
 ---
 
@@ -34,9 +34,19 @@ Cloudflare Artifacts is "versioned, Git-compatible storage" built around the
 observation that agents produce a step change in code volume and existing
 source-control platforms "were built to meet the needs of humans, not a 10x
 change in volume driven by agents" (source: https://blog.cloudflare.com/artifacts-git-for-agents-beta).
-It reached **open beta on Oct 1, 2026** — the same changelog entry that
-announces a competition to "Build the next GitHub on Cloudflare" — with
-billing starting October 14, 2026 (source: https://developers.cloudflare.com/changelog/product/artifacts).
+It is in **private beta** per the changelog entry of Apr 16, 2026, which
+also describes it as "Git-compatible storage built for scale: create tens
+of millions of repos, fork from any remote, and hand off a URL to any Git
+client" (source: https://developers.cloudflare.com/changelog/product/artifacts).
+The announcement blog aims at **public beta by early May**, and prices it at
+$0.15 per 1,000 operations (first 10k/mo included) and $0.50/GB-mo (first
+1GB included) (source: https://blog.cloudflare.com/artifacts-git-for-agents-beta).
+**Correction (pulse verification, Oct 2):** an earlier draft claimed "open
+beta on Oct 1, 2026 with billing starting October 14" — refuted by
+re-fetching both sources above; October 14 is instead the **submission
+deadline** of Cloudflare's separate competition to "build a new way for
+hundreds of thousands of agents to work on changes concurrently"
+(source: https://www.cloudflare.com/git-competition/).
 Docs describe it as a service for "storing and versioning files, code, and
 projects behind a Git-compatible interface", explicitly including agent
 session history in separate repos/branches and "forking sessions to explore
