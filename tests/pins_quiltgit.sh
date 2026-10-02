@@ -20,8 +20,20 @@
 #                       watch line); after quilt-init they do.
 #   P6  non-cell     -> a README-only commit creates NO receipt and NO
 #                       watch.log line.
+#   P10 dials ref    -> after a tick refs/quilt/dials exists, its tree holds
+#                       the ticked dial value, its commit has NO parent, and
+#                       quilt-read-dials prints alias:dial:value from it.
+#   P11 dials-only   -> the refs/quilt/dials tree contains no cell body
+#                       (or any non-dial) files — every path is
+#                       cells/<alias>/dials/<n> — while HEAD's tree does
+#                       carry bodies (so the check is not vacuous).
+#   P12 live ref     -> after a tick refs/quilt/HEAD exists; ls-tree shows
+#                       .quilt/live/last_receipt + .quilt/live/watch_tail
+#                       (with this tick's watch line inside);
+#                       `git ls-remote . refs/quilt/HEAD` answers locally.
 #
-# Exit 0 iff all six pin verdicts are PASS.
+# Pin ids continue the wave-3 sequence; P7–P9 live on a sibling lane.
+# Exit 0 iff all nine pin verdicts are PASS.
 
 set -u
 
@@ -275,6 +287,118 @@ pin_p6() {
   fi
 }
 
+# ---------------------------------------------------------------- P10
+pin_p10() {
+  local d v words out
+  if ! d=$(new_repo p10); then bad "P10-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+
+  if ( cd "$d" && ./.quilt/bin/quilt-tick a 3 0.37 ) >/dev/null 2>&1; then
+    ok "P10a tick (a dial3=0.37) committed"
+  else
+    bad "P10a tick failed"; return
+  fi
+
+  if git -C "$d" rev-parse --verify --quiet refs/quilt/dials >/dev/null; then
+    ok "P10b refs/quilt/dials exists after tick"
+  else
+    bad "P10b refs/quilt/dials missing after tick"; return
+  fi
+  v=$(git -C "$d" show refs/quilt/dials:cells/a/dials/3 2>/dev/null | tr -d '[:space:]')
+  if [ "$v" = "0.37" ]; then
+    ok "P10c dials ref tree holds ticked value (a.dials/3 == 0.37)"
+  else
+    bad "P10c a.dials/3 in dials ref == '$v' (want 0.37)"
+  fi
+  # rev-list --parents prints "<commit> <parent>...": one word = no parent
+  words=$(git -C "$d" rev-list --parents -n 1 refs/quilt/dials | wc -w | tr -d '[:space:]')
+  if [ "$words" -eq 1 ]; then
+    ok "P10d dials ref commit has NO parent (orphan snapshot)"
+  else
+    bad "P10d dials ref commit has $((words - 1)) parent(s)"
+  fi
+  out=$( cd "$d" && ./.quilt/bin/quilt-read-dials refs/quilt/dials 2>&1 )
+  if printf '%s\n' "$out" | grep -qx 'a:3:0.37'; then
+    ok "P10e quilt-read-dials prints 'a:3:0.37' from the ref (no checkout)"
+  else
+    bad "P10e quilt-read-dials output lacks a:3:0.37: $out"
+  fi
+}
+
+# ---------------------------------------------------------------- P11
+pin_p11() {
+  local d paths non dial
+  if ! d=$(new_repo p11); then bad "P11-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+  seed_cell "$d" b
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 5 0.5 ) >/dev/null 2>&1 \
+    || { bad "P11a tick failed"; return; }
+  ok "P11a tick (a dial5=0.5) committed"
+
+  if ! git -C "$d" rev-parse --verify --quiet refs/quilt/dials >/dev/null; then
+    bad "P11b refs/quilt/dials missing"; return
+  fi
+  # sanity: HEAD's tree DOES carry bodies, else "no bodies" is vacuous
+  if git -C "$d" ls-tree -r --name-only HEAD | grep -q '^cells/[^/]*/body$'; then
+    ok "P11b sanity: HEAD tree carries cell bodies (a, b)"
+  else
+    bad "P11b sanity: HEAD tree has no bodies — check vacuous"; return
+  fi
+
+  paths=$(git -C "$d" ls-tree -r --name-only refs/quilt/dials)
+  if printf '%s\n' "$paths" | grep -q '^cells/[^/]*/body$'; then
+    bad "P11c dials ref tree contains body files"
+  else
+    ok "P11c dials ref tree contains NO body files"
+  fi
+  non=$(printf '%s\n' "$paths" | grep -v -E '^cells/[^/]+/dials/[0-9]+$' || true)
+  if [ -z "$non" ]; then
+    dial=$(printf '%s\n' "$paths" | grep -c '^cells/[^/]\+/dials/[0-9]\+$' || true)
+    ok "P11d every path in dials ref is cells/<alias>/dials/<n> ($dial dial files)"
+  else
+    bad "P11d non-dial paths in dials ref: $(printf '%s' "$non" | tr '\n' ' ')"
+  fi
+}
+
+# ---------------------------------------------------------------- P12
+pin_p12() {
+  local d short paths want got
+  if ! d=$(new_repo p12); then bad "P12-0 setup (quilt-init runnable?)"; return; fi
+  seed_cell "$d" a
+  ( cd "$d" && ./.quilt/bin/quilt-tick a 2 0.66 ) >/dev/null 2>&1 \
+    || { bad "P12a tick failed"; return; }
+  ok "P12a tick (a dial2=0.66) committed"
+  short=$(git -C "$d" rev-parse --short HEAD)
+
+  if git -C "$d" rev-parse --verify --quiet refs/quilt/HEAD >/dev/null; then
+    ok "P12b refs/quilt/HEAD exists after tick"
+  else
+    bad "P12b refs/quilt/HEAD missing after tick"; return
+  fi
+  paths=$(git -C "$d" ls-tree -r --name-only refs/quilt/HEAD)
+  case "$paths" in
+    *.quilt/live/last_receipt*) ok "P12c ls-tree shows .quilt/live/last_receipt" ;;
+    *) bad "P12c last_receipt not in refs/quilt/HEAD tree: $paths" ;;
+  esac
+  case "$paths" in
+    *.quilt/live/watch_tail*) ok "P12d ls-tree shows .quilt/live/watch_tail" ;;
+    *) bad "P12d watch_tail not in refs/quilt/HEAD tree" ;;
+  esac
+  if git -C "$d" show refs/quilt/HEAD:.quilt/live/watch_tail 2>/dev/null \
+       | grep -q "tick $short "; then
+    ok "P12e watch_tail holds this tick's line (tick $short ...)"
+  else
+    bad "P12e watch_tail lacks the '$short' tick line"
+  fi
+  want=$(git -C "$d" rev-parse refs/quilt/HEAD)
+  got=$(git -C "$d" ls-remote . refs/quilt/HEAD 2>/dev/null | awk '{print $1}')
+  if [ -n "$got" ] && [ "$got" = "$want" ]; then
+    ok "P12f git ls-remote . refs/quilt/HEAD answers ($want)"
+  else
+    bad "P12f ls-remote answered '$got' (want $want)"
+  fi
+}
+
 # ---------------------------------------------------------------- main
 main() {
   say "# quilt-in-git pins  src=$SRC"
@@ -286,26 +410,39 @@ main() {
   pin_p4
   pin_p5
   pin_p6
+  pin_p10
+  pin_p11
+  pin_p12
   say ""
   say "# ---- per-pin verdicts ----"
-  local v1 v2 v3 v4 v5 v6 n
-  case "$FAILS" in *" P1"*) v1=FAIL;; *) v1=PASS;; esac
-  case "$FAILS" in *" P2"*) v2=FAIL;; *) v2=PASS;; esac
-  case "$FAILS" in *" P3"*) v3=FAIL;; *) v3=PASS;; esac
-  case "$FAILS" in *" P4"*) v4=FAIL;; *) v4=PASS;; esac
-  case "$FAILS" in *" P5"*) v5=FAIL;; *) v5=PASS;; esac
-  case "$FAILS" in *" P6"*) v6=FAIL;; *) v6=PASS;; esac
+  # FAILS is space-padded check ids (" P10c "); the [!0-9] keeps P1 from
+  # matching P10/P11/P12 ids.
+  local v1 v2 v3 v4 v5 v6 v10 v11 v12 n v
+  case "$FAILS" in *" P1"[!0-9]*)  v1=FAIL;;  *) v1=PASS;;  esac
+  case "$FAILS" in *" P2"[!0-9]*)  v2=FAIL;;  *) v2=PASS;;  esac
+  case "$FAILS" in *" P3"[!0-9]*)  v3=FAIL;;  *) v3=PASS;;  esac
+  case "$FAILS" in *" P4"[!0-9]*)  v4=FAIL;;  *) v4=PASS;;  esac
+  case "$FAILS" in *" P5"[!0-9]*)  v5=FAIL;;  *) v5=PASS;;  esac
+  case "$FAILS" in *" P6"[!0-9]*)  v6=FAIL;;  *) v6=PASS;;  esac
+  case "$FAILS" in *" P10"[!0-9]*) v10=FAIL;; *) v10=PASS;; esac
+  case "$FAILS" in *" P11"[!0-9]*) v11=FAIL;; *) v11=PASS;; esac
+  case "$FAILS" in *" P12"[!0-9]*) v12=FAIL;; *) v12=PASS;; esac
   say "P1 receipt+watch on dial commit : $v1"
   say "P2 freeze enforcement          : $v2"
   say "P3 cascade                      : $v3"
   say "P4 rewind                       : $v4"
   say "P5 clone needs quilt-init       : $v5"
   say "P6 non-cell commit silent       : $v6"
+  say "P10 refs/quilt/dials snapshot   : $v10"
+  say "P11 dials-only tree             : $v11"
+  say "P12 refs/quilt/HEAD live state  : $v12"
   n=0
-  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6"; do [ "$v" = PASS ] && n=$((n+1)); done
+  for v in "$v1" "$v2" "$v3" "$v4" "$v5" "$v6" "$v10" "$v11" "$v12"; do
+    [ "$v" = PASS ] && n=$((n+1))
+  done
   say ""
-  say "PINS: $n/6 pins pass ($PASS checks pass, $FAIL checks fail)"
-  if [ "$n" -eq 6 ]; then
+  say "PINS: $n/9 pins pass ($PASS checks pass, $FAIL checks fail)"
+  if [ "$n" -eq 9 ]; then
     say "PINS: ALL PASS"
     rm -rf "$SCRATCH"
     exit 0

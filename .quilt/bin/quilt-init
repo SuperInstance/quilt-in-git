@@ -61,6 +61,9 @@ cat > .quilt/hooks/post-commit <<'QUILT_HOOK_EOF'
 #   3. if cascade changed dial files: git add cells/ and auto-commit
 #      "quilt: cascade after <short>" with --no-verify
 #   4. append "tick <short> <short> <cells>" to .quilt/watch.log
+#   5. .quilt/bin/quilt-publish snapshots the dials into the orphan ref
+#      refs/quilt/dials and the vitals into refs/quilt/HEAD — after the
+#      watch line, so watch_tail includes this tick
 #
 # Commits touching no cells/ path exit 0 silently, as do the hook's own
 # "quilt: cascade after ..." commits (no recursion).
@@ -88,6 +91,7 @@ fi
 
 mkdir -p .quilt
 printf 'tick %s %s %s\n' "$SHORT" "$SHORT" "$CELLS" >> .quilt/watch.log
+.quilt/bin/quilt-publish >/dev/null
 exit 0
 QUILT_HOOK_EOF
 
@@ -100,3 +104,4 @@ touch .quilt/watch.log
 echo "quilt: initialised at $ROOT"
 echo "quilt: hooks active (core.hooksPath=.quilt/hooks)"
 echo "quilt: ticks are ordinary commits touching cells/ — try .quilt/bin/quilt-tick <alias> <dial> <value>"
+echo "quilt: every tick publishes refs/quilt/dials + refs/quilt/HEAD (fleet state in kilobytes)"
