@@ -17,10 +17,10 @@ with what a user gains and loses.
 1. Jujutsu: working-copy-as-commit, change vs commit, undo — *DONE (3 primary docs fetched Oct 2)*
 2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale — *DONE (2 primary docs fetched Oct 2: darcs.net/Theory/Motivation + pijul.org/manual/theory.html; performance-history claim left INFERRED)*
 3. CRDTs: Automerge and Yjs vs dials-as-files
-4. git worktree orchestration precedents — *PENDING (same)*
+4. git worktree orchestration precedents — *DONE (3 primary docs fetched Oct 2: git-worktree + git-sparse-checkout man pages + jj working-copy/workspaces page; experimental-status caveat quoted verbatim)*
 5. Cloudflare Artifacts + Workers platform capabilities
 6. Agent-native git experiments, today — *DONE (4 fetched sources, INFERRED flagged)*
-7. Synthesis table: what quilt-in-git should steal — *PENDING (same)*
+7. Synthesis table: what quilt-in-git should steal — *PENDING (only remaining section)*
 
 ---
 
@@ -492,3 +492,89 @@ commit-and-push (INFERRED).
    textual adjacency limitation mostly evaporates, because a dial file is
    small and its whole content is the relevant region (source: darcs
    Motivation; transfer INFERRED).
+
+---
+
+## 4. git worktree orchestration precedents
+
+*(Researched Oct 2, 2026. Primary sources fetched this pass:
+https://git-scm.com/docs/git-worktree ,
+https://git-scm.com/docs/git-sparse-checkout , and the Jujutsu working-copy /
+workspaces page at https://docs.jj-vcs.dev/latest/working-copy/ .)*
+
+### 4.1 What git actually guarantees: one branch, one checkout, shared object store
+
+A repository has exactly one main worktree plus zero or more linked
+worktrees; linked worktrees share everything except per-worktree files —
+HEAD, index, and the administrative metadata under `$GIT_DIR/worktrees/`
+(source: git-worktree man page). The load-bearing guarantee for parallel
+lanes: a branch checked out in one worktree **refuses** to be checked out
+in another unless `--force` is used — git itself enforces
+single-checkout-per-branch (source: same). `git worktree add ../hotfix`
+auto-creates a branch named for the path; `-d` gives a throwaway detached
+HEAD; `--orphan` associates the worktree with an *unborn* branch (source:
+same). Worktrees on removable or network storage can be `lock`ed with a
+free-text `--reason` that survives in the administrative files and prevents
+automatic pruning; stale worktrees are reclaimed via `prune` or
+`gc.worktreePruneExpire` (source: same).
+
+### 4.2 Sparse checkout: per-worktree focus, officially experimental
+
+`git sparse-checkout set` narrows a working tree to a cone of directories
+and — critically for multi-lane repos — **stores the sparsity in
+worktree-specific config** (`extensions.worktreeConfig`), so adjusting one
+worktree's focus never touches another's (source: git-sparse-checkout man
+page). Two sharp edges documented in the man page itself: switching
+branches will not update paths outside the sparse cone, and `git commit -a`
+will not record outside-cone paths as deleted (source: same) — i.e. a
+narrow cone silently widens what a lane *doesn't* see, in both directions.
+And the caveat quoted verbatim: "THIS COMMAND IS EXPERIMENTAL. ITS
+BEHAVIOR ... WILL LIKELY CHANGE" (source: same); non-cone pattern mode is
+explicitly not recommended.
+
+### 4.3 The jj contrast: workspaces each get a working-copy *commit*
+
+Jujutsu's workspaces page states each workspace has its own working-copy
+commit, auto-committed on change — so N workspaces are N moving fronts
+over one repo by construction (source: jj working-copy docs). Git
+worktrees are weaker: N checkouts share one branch-ref namespace, so the
+"each lane its own frontier" property has to be simulated with one branch
+per worktree (source: git-worktree branch-per-worktree behavior;
+comparison INFERRED beyond the two man pages).
+
+**What a user gains.** Branch-per-lane mutual exclusion for free — the
+exact discipline quilt's freeze files try to create is already git-native
+at the worktree layer (source: git-worktree). Focused lanes that cannot
+see — and therefore cannot corrupt — cells outside their cone, per
+worktree, without affecting other lanes' checkouts (source:
+git-sparse-checkout). A reasoned-hold mechanism (`lock --reason`) whose
+justification is stored in-band next to the thing it protects (source:
+git-worktree).
+
+**What a user loses / where it bites.** Ops surface: stale worktrees need
+prune/repair discipline or administrative cruft accumulates (source: same).
+Sparse-checkout's experimental status and its silent semantics (no branch
+switching outside cone; `commit -a` blind spots) mean a focused lane can
+*miss* changes it should have seen — focus cuts both ways (source:
+git-sparse-checkout). And worktrees do not fork the ref namespace, so
+cross-lane collision moves from "file conflict" to "branch name conflict"
+(INFERRED).
+
+**Transfer to quilt-in-git.** Three steals:
+1. *Worktree = lane frontier, concretely*: quilt lanes (wave3's G/H/I, the
+   wave4-query lane) already run worktree-isolated; make it structural —
+   `git worktree add -b lane/<name>`, and let git's single-checkout rule
+   stand in as the freeze-file enforcer at the branch layer (source:
+   git-worktree; transfer INFERRED).
+2. *Dial-only worktrees via `--orphan` + cone sparsity*: the w3b dial-only
+   orphan-branch idea pairs naturally with a cone limited to
+   `cells/<alias>/dials/` — a lane that physically cannot write bodies or
+   other cells' dials (sources: git-worktree `--orphan`, git-sparse-checkout
+   cone mode; transfer INFERRED). Honest cost: the sparse-mode blindness
+   documented above applies to quilt cascades that span cells — a
+   dial-only cone will not *see* a cross-cell cascade receipt it causes.
+3. *Lock-with-reason as a first-class quilt hold*: `git worktree lock
+   --reason` is a precedented, in-band "do not reap, because…" — the same
+   shape as doubt-ledger's discharge-requires-reason rule; a quilt hold on
+   a contested dial could carry its reason the same way (source:
+   git-worktree lock semantics; transfer INFERRED).
