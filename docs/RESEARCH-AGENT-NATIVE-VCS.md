@@ -20,7 +20,7 @@ with what a user gains and loses.
 4. git worktree orchestration precedents — *DONE (3 primary docs fetched Oct 2: git-worktree + git-sparse-checkout man pages + jj working-copy/workspaces page; experimental-status caveat quoted verbatim)*
 5. Cloudflare Artifacts + Workers platform capabilities
 6. Agent-native git experiments, today — *DONE (4 fetched sources, INFERRED flagged)*
-7. Synthesis table: what quilt-in-git should steal — *PENDING (only remaining section)*
+7. Synthesis table: what quilt-in-git should steal — *DONE (Oct 2)*
 
 ---
 
@@ -578,3 +578,58 @@ cross-lane collision moves from "file conflict" to "branch name conflict"
    shape as doubt-ledger's discharge-requires-reason rule; a quilt hold on
    a contested dial could carry its reason the same way (source:
    git-worktree lock semantics; transfer INFERRED).
+
+---
+
+## 7. Synthesis table: what quilt-in-git should steal
+
+*(Written Oct 2, 2026, from sections 1-6 above. Every row cites the section
+it synthesizes; rows that go beyond the section's own "Transfer" lists are
+marked INFERRED.)*
+
+### 7.1 The decision matrix
+
+| System | What it proved (sourced in §) | Verdict for quilt-in-git | Where it lands |
+|---|---|---|---|
+| Jujutsu (§1) | Working-copy-as-commit + operation log + first-class conflicts | **Steal**: undo substrate must record pointer state, not just commits; contested-dial merge becomes recorded state, resolvable whenever | `.quilt` op-log concept; cascade conflict entries |
+| Patch theory / Darcs (§2) | Dependency-by-rearrangement gives minimal cherry-pick closures | **Steal in miniature**: per-dial dependency queries ("which ticks does dial X actually depend on?") are cheap over small dial files | wave4-query coverage surface |
+| Pijul (§2) | Change identity survives context; version ids ≠ log order | **Adopt as doctrine**: receipt chain stays order-sensitive; any future version NAME must be non-linear | already sealed in §2.3 steal 2 |
+| CRDTs (§3) | Merge-without-conflict exists, but only behind binary storage | **Reject for dials, defer for bodies**: files win for scalar dials (registers, diffable, greppable); CRDT body-text stays an optional later hybrid (Aldine precedent) | future cell-body collaboration lane |
+| git worktrees (§4) | Single-checkout guarantee + per-worktree sparse cones | **Steal now — already live**: lanes are worktree-isolated; make lane structure structural (`lane/<name>`, sparse dial-only cones, lock-with-reason holds) | lane doctrine, VERIFY.md harvest protocol |
+| CF Artifacts (§5) | Millions of repos, token TTLs, git-over-HTTPS at agent volume | **Watch, don't adopt**: competition surface (Oct 14 deadline); our differentiation is the receipt discipline on plain git, which Artifacts' pricing ($0.15/1k ops) makes expensive to replicate | cf-native-backend design Q1-Q3 |
+| Agent-native tooling (§6) | AGENTS.md de-facto standard; receipts must live at harness layer | **Steal**: AGENTS.md instruction file; pins as the audit trail where model benchmarks rank models not tools | repo-root AGENTS.md; pins/ receipts |
+
+### 7.2 Ranked steals (whole-memo priority order)
+
+1. **Worktree-as-lane is the concurrency primitive** (§4) — already half-live in
+   wave3/wave4 lanes; formalizing it costs only doctrine, and the
+   single-checkout rule is a free freeze-file enforcer. INFERRED: this is
+   the cheapest structural win on the board.
+2. **Undo must record pointer state, not just commits** (§1) — the Mavis
+   "replayable lineage" thesis and jj's op log converge here; a quilt
+   rewind handle wants dial-position history on top of the commit log.
+3. **Version names must be non-linear; the receipt chain stays
+   order-sensitive by design** (§2) — this is already doctrine after §2's
+   refutation of XOR-able version ids; keep it pinned.
+4. **Per-dial dependency queries are darcs commutation in miniature**
+   (§2) — the natural query surface for wave4-query's coverage command,
+   since dial files are small enough that textual adjacency is not the
+   bottleneck.
+5. **Receipts at the harness layer** (§6) — benchmark suites rank models,
+   not tools; the audit trail for agent lanes must come from pins/hooks,
+   which is precisely the `.quilt` design.
+
+### 7.3 What we explicitly do not build
+
+- CRDT storage for dials (§3): registers with arbitrary deterministic
+  winners buy nothing over files; two storage/sync stories is the price,
+  and auditability is quilt's core asset.
+- A competition-entry clone of CF Artifacts (§5): private beta, priced per
+  operation, and our moat is the receipt law, not repo volume. cf-native-backend
+  stays a design+substrate surface (support-first stance from the wardroom).
+- Patch-algebra for bodies (§2): darcs' exponential-merge history and
+  Pijul's zombie-vertex shapes show the cost; bodies stay file-backed and
+  conflicts stay recorded, not algebraically eliminated.
+
+**Status.** All seven sections now written; this table is the memo's
+conclusion. Backend design remains out of scope per the memo's purpose.
