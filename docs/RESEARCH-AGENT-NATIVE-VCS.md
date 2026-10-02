@@ -15,12 +15,12 @@ with what a user gains and loses.
 
 **Section index.**
 1. Jujutsu: working-copy-as-commit, change vs commit, undo — *DONE (3 primary docs fetched Oct 2)*
-2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale — *PENDING (same)*
+2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale — *DONE (2 primary docs fetched Oct 2: darcs.net/Theory/Motivation + pijul.org/manual/theory.html; performance-history claim left INFERRED)*
 3. CRDTs: Automerge and Yjs vs dials-as-files
-4. git worktree orchestration precedents — *PENDING (same)*
+4. git worktree orchestration precedents — *DONE (3 primary docs fetched Oct 2: git-worktree + git-sparse-checkout man pages + jj working-copy/workspaces page; experimental-status caveat quoted verbatim)*
 5. Cloudflare Artifacts + Workers platform capabilities
 6. Agent-native git experiments, today — *DONE (4 fetched sources, INFERRED flagged)*
-7. Synthesis table: what quilt-in-git should steal — *PENDING (same)*
+7. Synthesis table: what quilt-in-git should steal — *DONE (Oct 2)*
 
 ---
 
@@ -376,3 +376,260 @@ follows from the three docs' existence as concept tutorials).
    working copy" would make every tool invocation a tick — which is either
    the cleanest tick story yet or a receipt-chain flood, depending on hook
    design (source: working-copy doc; transfer INFERRED).
+
+## 2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale
+
+### 2.1 Darcs: patches as the primary objects, commutation as the algebra
+
+Darcs inverts git's ontology: patches, not snapshots, are the primary
+objects, and the system's core is a *patch theory* — rules for when two
+patches can be commuted (swapped) and what their swap partners look like
+(source: https://darcs.net/Theory/Motivation). The payoff is dependency
+inference by rearrangement: to cherry-pick patch `F` out of sequence
+`A B C D E F`, darcs commutes `F` backwards — first against `E`, then
+against `D`. Each successful commute proves non-dependency; the first
+failed commute names the dependency. "Since this reordering is based on a
+sound theory of patches, it is guaranteed that darcs will find the minimal
+set of patches it has to pull to satisfy the dependencies of any patch you
+requested, without asking you what other patches it needs" (source: same).
+
+The same page states the bad side plainly: the theory "works on a purely
+textual level. It can only find out that two patches depend on each other
+if they affect the same portions of text." A call-site patch and a
+return-value-check patch are invisible to each other unless they fall in
+the same region; semantic dependencies can only be added by hand (source:
+same). A conflict, correspondingly, is a pair of patches for which
+commutation is not defined — the algebra *fails* rather than producing a
+marker-laden merge state (source: same page's commutation framing; the
+conflict mechanics detail is INFERRED — not sourced this pass).
+
+### 2.2 Pijul: a line-graph where change identity is load-bearing
+
+Pijul's theory page models a repository as a directed graph of lines:
+vertices are lines, edges labelled by the change that introduced them read
+"according to change X, line a comes before line b" (source:
+https://pijul.org/manual/theory.html). Three design decisions matter for
+us:
+
+**Vertices are uniquely identified by (hash of introducing change, position
+in that change)** — "two lines of text with the same content, introduced
+by different changes, will be different", and a line keeps its identity
+"even if the change is applied in a totally different context" (source:
+same). The system is append-only: there are exactly two basic actions —
+adding vertices with alive edges, and mapping an existing edge label to a
+deleted one. Deletion is a labelling, not a removal (source: same).
+
+**Dependencies are the minimal context.** A change adding a vertex depends
+on the changes that introduced its surrounding lines; a change deleting a
+vertex must depend on the change that introduced it (source: same). The
+page argues edge labels cannot be dropped: without change-identity on
+edges, parallel deletions merge into one and an inverse applies to both
+incorrectly, and a deleted-up-context vs deleted-down-context asymmetry
+("zombie vertices") becomes undetectable — Alice can only tell Bob didn't
+know of her change *because* the edges carry the labels (source: same).
+
+**Pijul is a CRDT, and version identity needs cryptography-flavored
+math.** Conflicts are three graph shapes: alive vertices with no directed
+path between them, paths in opposite directions (a cycle), or zombie
+vertices; the add-vertex/map-label operations make the structure "a
+conflict-free replicated datatype" (source: same). Because commuting
+patches yield identical repos in either order, version identifiers must be
+order-independent — but naive schemes like XOR of change hashes are
+forgeable, "since the hashes are random, there is a high probability that
+any n hashes form an independent linear basis"; Pijul instead derives the
+version id by exponentiation in a group, so forging a version identity
+requires solving a discrete-log problem (source: same). Files get two
+vertices (name + inode) so directory renames commute with file renames
+(source: same). Pseudo-edges and a BLOCK edge label keep the alive
+subgraph connected and ordering/status roles distinct for performance
+(source: same).
+
+### 2.3 What breaks at scale
+
+Two honest failure records. First, the darcs family's own documentation
+admits the textual-only dependency model is the ceiling: anything requiring
+language semantics needs manual dependency annotation (source:
+Theory/Motivation). Second, the Pijul theory page itself documents how much
+machinery minimal-patch-algebra costs at the file and performance layer —
+pseudo-edges on every deletion, the BLOCK label to disambiguate ordering
+from status, a two-vertex file model to make renames commute (source:
+theory.html). The widely-cited exponential-merge blowups that pushed darcs
+from "mergers" to "conflictors" and shaped darcs-2/darcs-3 are **INFERRED
+here** — this pass fetched the motivation page, not the performance
+history; a later section pass should source them before we lean on that
+claim.
+
+**What a user gains.** True cherry-pick: any patch can be lifted to any
+context the algebra permits, with dependency closure computed, not guessed
+(source: darcs Motivation). Order-independence where it holds: two
+independent changes are the *same* change regardless of arrival order —
+the anti-Goodhart property our receipt chain lacks by design (Pijul, source
+theory.html). Conflicts as data: Pijul's conflict is a graph shape that
+survives synchronization, not a transient marker file (source: same).
+
+**What a user loses / where it bites.** Dependency blindness beyond
+textual adjacency (darcs, source). Ecosystem and interop: neither darcs
+nor Pijul speaks the git protocol natively, so every collaborator is a
+convert (INFERRED — no doc fetched this pass states it; safe from general
+knowledge, flagged per protocol). And the mental model cost is real:
+"commute", "minimal context", "zombie vertex" is a steeper onboarding than
+commit-and-push (INFERRED).
+
+**Transfer to quilt-in-git.** Three steals, in priority order:
+1. *Identity across context*: Pijul's line keeps its identity when applied
+   elsewhere; a contested dial's cascade entry could carry the *identity*
+   of the tick that set the contested value, not just the value (source:
+   theory.html's vertex-identity design; transfer INFERRED).
+2. *Version id must be non-linear*: our fnv1a-64 receipt chain is
+   order-sensitive and genesis-anchored *on purpose* — a receipt log wants
+   order-dependence, a *version name* does not. If quilt ever names
+   "current state" separately from "log tip", don't derive it by XOR/sum
+   of tick hashes; that invites the linear-forgery Pijul's discrete-log
+   scheme exists to prevent (source: theory.html; transfer INFERRED).
+3. *Minimal-context dependency queries*: wave4's `quilt-query` coverage
+   question ("which ticks does dial X actually depend on?") is exactly
+   darcs' commute-backwards computation in miniature — over dial files the
+   textual adjacency limitation mostly evaporates, because a dial file is
+   small and its whole content is the relevant region (source: darcs
+   Motivation; transfer INFERRED).
+
+---
+
+## 4. git worktree orchestration precedents
+
+*(Researched Oct 2, 2026. Primary sources fetched this pass:
+https://git-scm.com/docs/git-worktree ,
+https://git-scm.com/docs/git-sparse-checkout , and the Jujutsu working-copy /
+workspaces page at https://docs.jj-vcs.dev/latest/working-copy/ .)*
+
+### 4.1 What git actually guarantees: one branch, one checkout, shared object store
+
+A repository has exactly one main worktree plus zero or more linked
+worktrees; linked worktrees share everything except per-worktree files —
+HEAD, index, and the administrative metadata under `$GIT_DIR/worktrees/`
+(source: git-worktree man page). The load-bearing guarantee for parallel
+lanes: a branch checked out in one worktree **refuses** to be checked out
+in another unless `--force` is used — git itself enforces
+single-checkout-per-branch (source: same). `git worktree add ../hotfix`
+auto-creates a branch named for the path; `-d` gives a throwaway detached
+HEAD; `--orphan` associates the worktree with an *unborn* branch (source:
+same). Worktrees on removable or network storage can be `lock`ed with a
+free-text `--reason` that survives in the administrative files and prevents
+automatic pruning; stale worktrees are reclaimed via `prune` or
+`gc.worktreePruneExpire` (source: same).
+
+### 4.2 Sparse checkout: per-worktree focus, officially experimental
+
+`git sparse-checkout set` narrows a working tree to a cone of directories
+and — critically for multi-lane repos — **stores the sparsity in
+worktree-specific config** (`extensions.worktreeConfig`), so adjusting one
+worktree's focus never touches another's (source: git-sparse-checkout man
+page). Two sharp edges documented in the man page itself: switching
+branches will not update paths outside the sparse cone, and `git commit -a`
+will not record outside-cone paths as deleted (source: same) — i.e. a
+narrow cone silently widens what a lane *doesn't* see, in both directions.
+And the caveat quoted verbatim: "THIS COMMAND IS EXPERIMENTAL. ITS
+BEHAVIOR ... WILL LIKELY CHANGE" (source: same); non-cone pattern mode is
+explicitly not recommended.
+
+### 4.3 The jj contrast: workspaces each get a working-copy *commit*
+
+Jujutsu's workspaces page states each workspace has its own working-copy
+commit, auto-committed on change — so N workspaces are N moving fronts
+over one repo by construction (source: jj working-copy docs). Git
+worktrees are weaker: N checkouts share one branch-ref namespace, so the
+"each lane its own frontier" property has to be simulated with one branch
+per worktree (source: git-worktree branch-per-worktree behavior;
+comparison INFERRED beyond the two man pages).
+
+**What a user gains.** Branch-per-lane mutual exclusion for free — the
+exact discipline quilt's freeze files try to create is already git-native
+at the worktree layer (source: git-worktree). Focused lanes that cannot
+see — and therefore cannot corrupt — cells outside their cone, per
+worktree, without affecting other lanes' checkouts (source:
+git-sparse-checkout). A reasoned-hold mechanism (`lock --reason`) whose
+justification is stored in-band next to the thing it protects (source:
+git-worktree).
+
+**What a user loses / where it bites.** Ops surface: stale worktrees need
+prune/repair discipline or administrative cruft accumulates (source: same).
+Sparse-checkout's experimental status and its silent semantics (no branch
+switching outside cone; `commit -a` blind spots) mean a focused lane can
+*miss* changes it should have seen — focus cuts both ways (source:
+git-sparse-checkout). And worktrees do not fork the ref namespace, so
+cross-lane collision moves from "file conflict" to "branch name conflict"
+(INFERRED).
+
+**Transfer to quilt-in-git.** Three steals:
+1. *Worktree = lane frontier, concretely*: quilt lanes (wave3's G/H/I, the
+   wave4-query lane) already run worktree-isolated; make it structural —
+   `git worktree add -b lane/<name>`, and let git's single-checkout rule
+   stand in as the freeze-file enforcer at the branch layer (source:
+   git-worktree; transfer INFERRED).
+2. *Dial-only worktrees via `--orphan` + cone sparsity*: the w3b dial-only
+   orphan-branch idea pairs naturally with a cone limited to
+   `cells/<alias>/dials/` — a lane that physically cannot write bodies or
+   other cells' dials (sources: git-worktree `--orphan`, git-sparse-checkout
+   cone mode; transfer INFERRED). Honest cost: the sparse-mode blindness
+   documented above applies to quilt cascades that span cells — a
+   dial-only cone will not *see* a cross-cell cascade receipt it causes.
+3. *Lock-with-reason as a first-class quilt hold*: `git worktree lock
+   --reason` is a precedented, in-band "do not reap, because…" — the same
+   shape as doubt-ledger's discharge-requires-reason rule; a quilt hold on
+   a contested dial could carry its reason the same way (source:
+   git-worktree lock semantics; transfer INFERRED).
+
+---
+
+## 7. Synthesis table: what quilt-in-git should steal
+
+*(Written Oct 2, 2026, from sections 1-6 above. Every row cites the section
+it synthesizes; rows that go beyond the section's own "Transfer" lists are
+marked INFERRED.)*
+
+### 7.1 The decision matrix
+
+| System | What it proved (sourced in §) | Verdict for quilt-in-git | Where it lands |
+|---|---|---|---|
+| Jujutsu (§1) | Working-copy-as-commit + operation log + first-class conflicts | **Steal**: undo substrate must record pointer state, not just commits; contested-dial merge becomes recorded state, resolvable whenever | `.quilt` op-log concept; cascade conflict entries |
+| Patch theory / Darcs (§2) | Dependency-by-rearrangement gives minimal cherry-pick closures | **Steal in miniature**: per-dial dependency queries ("which ticks does dial X actually depend on?") are cheap over small dial files | wave4-query coverage surface |
+| Pijul (§2) | Change identity survives context; version ids ≠ log order | **Adopt as doctrine**: receipt chain stays order-sensitive; any future version NAME must be non-linear | already sealed in §2.3 steal 2 |
+| CRDTs (§3) | Merge-without-conflict exists, but only behind binary storage | **Reject for dials, defer for bodies**: files win for scalar dials (registers, diffable, greppable); CRDT body-text stays an optional later hybrid (Aldine precedent) | future cell-body collaboration lane |
+| git worktrees (§4) | Single-checkout guarantee + per-worktree sparse cones | **Steal now — already live**: lanes are worktree-isolated; make lane structure structural (`lane/<name>`, sparse dial-only cones, lock-with-reason holds) | lane doctrine, VERIFY.md harvest protocol |
+| CF Artifacts (§5) | Millions of repos, token TTLs, git-over-HTTPS at agent volume | **Watch, don't adopt**: competition surface (Oct 14 deadline); our differentiation is the receipt discipline on plain git, which Artifacts' pricing ($0.15/1k ops) makes expensive to replicate | cf-native-backend design Q1-Q3 |
+| Agent-native tooling (§6) | AGENTS.md de-facto standard; receipts must live at harness layer | **Steal**: AGENTS.md instruction file; pins as the audit trail where model benchmarks rank models not tools | repo-root AGENTS.md; pins/ receipts |
+
+### 7.2 Ranked steals (whole-memo priority order)
+
+1. **Worktree-as-lane is the concurrency primitive** (§4) — already half-live in
+   wave3/wave4 lanes; formalizing it costs only doctrine, and the
+   single-checkout rule is a free freeze-file enforcer. INFERRED: this is
+   the cheapest structural win on the board.
+2. **Undo must record pointer state, not just commits** (§1) — the Mavis
+   "replayable lineage" thesis and jj's op log converge here; a quilt
+   rewind handle wants dial-position history on top of the commit log.
+3. **Version names must be non-linear; the receipt chain stays
+   order-sensitive by design** (§2) — this is already doctrine after §2's
+   refutation of XOR-able version ids; keep it pinned.
+4. **Per-dial dependency queries are darcs commutation in miniature**
+   (§2) — the natural query surface for wave4-query's coverage command,
+   since dial files are small enough that textual adjacency is not the
+   bottleneck.
+5. **Receipts at the harness layer** (§6) — benchmark suites rank models,
+   not tools; the audit trail for agent lanes must come from pins/hooks,
+   which is precisely the `.quilt` design.
+
+### 7.3 What we explicitly do not build
+
+- CRDT storage for dials (§3): registers with arbitrary deterministic
+  winners buy nothing over files; two storage/sync stories is the price,
+  and auditability is quilt's core asset.
+- A competition-entry clone of CF Artifacts (§5): private beta, priced per
+  operation, and our moat is the receipt law, not repo volume. cf-native-backend
+  stays a design+substrate surface (support-first stance from the wardroom).
+- Patch-algebra for bodies (§2): darcs' exponential-merge history and
+  Pijul's zombie-vertex shapes show the cost; bodies stay file-backed and
+  conflicts stay recorded, not algebraically eliminated.
+
+**Status.** All seven sections now written; this table is the memo's
+conclusion. Backend design remains out of scope per the memo's purpose.
