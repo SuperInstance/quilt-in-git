@@ -225,3 +225,69 @@ alternatives instead of silent clobber.
 grows with edit counts (compaction/GC becomes your problem), and concurrent
 scalar writes resolve arbitrarily-but-deterministically rather than as a
 reviewable diff.
+
+---
+
+## 6. Agent-native git experiments, today
+
+*(Bounded slice researched Oct 2 pulse — AGENTS.md ecosystem + terminal
+agents. Sections 1/2/4/7 still pending.)*
+
+### 6.1 AGENTS.md: instructions-as-repo-file, now a stewarded standard
+
+AGENTS.md is "a README for agents": a predictable, plain-Markdown file at
+the repo root carrying build/test commands, code style, security gotchas,
+and PR rules — deliberately separate from README.md so agent-facing
+instruction doesn't clutter human-facing docs (source: https://agents.md).
+It emerged collaboratively across OpenAI Codex, Amp, Google Jules, Cursor,
+and Factory, and is now "stewarded by the Agentic AI Foundation under the
+Linux Foundation"; the site claims adoption by "over 60k open-source
+projects" (source: https://agents.md).
+Resolution rules are explicit: "the closest AGENTS.md to the edited file
+wins" (nested files for monorepo subprojects — OpenAI's main repo ships 88
+at time of writing), and explicit user chat prompts override everything
+(source: https://agents.md).
+Aider consumes it via `.aider.conf.yml: read: AGENTS.md`; Gemini CLI via
+`settings.json context.fileName` — i.e., the file became interop surface,
+not vendor lock-in (source: https://agents.md).
+INFERRED: AGENTS.md is convention-only — nothing *enforces* that an agent
+follows it; verification of compliance is whatever the harness chooses to
+run (source for the file format: https://agents.md; the enforcement gap
+is our reading).
+
+### 6.2 Terminal agents: git is the audit trail, autonomy varies by where the human sits
+
+The 2026 terminal-agent field splits on a single axis — **where the human
+is in the loop** (source: https://wetheflywheel.com/en/comparisons/openhands-vs-aider/):
+
+- **Aider** (Apache-2.0, ~45.8k stars, latest tag Aug 2025): pair-programmer
+  model — every accepted change "lands as an atomic Git commit you can
+  inspect or revert", `/undo` reverts; Architect/Editor mode splits a
+  planning call from a writing call for cost (source:
+  https://wetheflywheel.com/en/comparisons/openhands-vs-aider/,
+  https://wenexgensolutions.com/blog/best-ai-coding-agents-2026/).
+- **OpenHands** (MIT, ~75.8k stars, v1.7.0 May 2026): autonomous — give it
+  an issue, it plans/writes/tests/browses in a Docker sandbox and produces
+  a PR; human approval is at PR level, not per-edit; 72.8% SWE-bench
+  Verified headline (source:
+  https://wetheflywheel.com/en/comparisons/openhands-vs-aider/).
+- **OpenCode / Codex CLI**: terminal-native alternatives — OpenCode ~100k
+  stars with 75+ LLM providers; Codex CLI ~60k stars, OpenAI-only
+  (source: https://wetheflywheel.com/en/guides/open-source-ai-coding-agents-2026/).
+- **Devin**: cloud-VM async batch (Jira ticket → PR unattended), $500/mo
+  Team floor (source: https://www.birjob.com/blog/ai-coding-agents-2026).
+
+Benchmarks mostly rank the *model*, not the tool — "a tool's score moves
+with whichever frontier model you point it at" (source:
+https://wetheflywheel.com/en/comparisons/openhands-vs-aider/) — which is
+exactly why receipts-over-claims discipline (our VERIFY.md protocol) has to
+live at the harness/repo layer, not the leaderboard layer. INFERRED.
+
+**User gains:** a de-facto instruction file every agent reads (AGENTS.md),
+and — for Aider-style tools — a built-in commit-per-change audit trail that
+matches quilt-in-git's tick-as-commit model almost exactly.
+**User loses:** nothing enforces the instructions; autonomous lanes
+(OpenHands/Devin) trade per-edit review for PR-level review, so receipt
+quality depends entirely on the harness choosing to pin and verify
+(claim-vs-receipt gap identical to the one our decorative-pin audit found
+fleet-side Oct 2).
