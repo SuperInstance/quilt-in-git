@@ -15,7 +15,7 @@ with what a user gains and loses.
 
 **Section index.**
 1. Jujutsu: working-copy-as-commit, change vs commit, undo — *DONE (3 primary docs fetched Oct 2)*
-2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale — *PENDING (same)*
+2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale — *DONE (2 primary docs fetched Oct 2: darcs.net/Theory/Motivation + pijul.org/manual/theory.html; performance-history claim left INFERRED)*
 3. CRDTs: Automerge and Yjs vs dials-as-files
 4. git worktree orchestration precedents — *PENDING (same)*
 5. Cloudflare Artifacts + Workers platform capabilities
@@ -376,3 +376,119 @@ follows from the three docs' existence as concept tutorials).
    working copy" would make every tool invocation a tick — which is either
    the cleanest tick story yet or a receipt-chain flood, depending on hook
    design (source: working-copy doc; transfer INFERRED).
+
+## 2. Patch theory: Darcs, Pijul, commutation, and what breaks at scale
+
+### 2.1 Darcs: patches as the primary objects, commutation as the algebra
+
+Darcs inverts git's ontology: patches, not snapshots, are the primary
+objects, and the system's core is a *patch theory* — rules for when two
+patches can be commuted (swapped) and what their swap partners look like
+(source: https://darcs.net/Theory/Motivation). The payoff is dependency
+inference by rearrangement: to cherry-pick patch `F` out of sequence
+`A B C D E F`, darcs commutes `F` backwards — first against `E`, then
+against `D`. Each successful commute proves non-dependency; the first
+failed commute names the dependency. "Since this reordering is based on a
+sound theory of patches, it is guaranteed that darcs will find the minimal
+set of patches it has to pull to satisfy the dependencies of any patch you
+requested, without asking you what other patches it needs" (source: same).
+
+The same page states the bad side plainly: the theory "works on a purely
+textual level. It can only find out that two patches depend on each other
+if they affect the same portions of text." A call-site patch and a
+return-value-check patch are invisible to each other unless they fall in
+the same region; semantic dependencies can only be added by hand (source:
+same). A conflict, correspondingly, is a pair of patches for which
+commutation is not defined — the algebra *fails* rather than producing a
+marker-laden merge state (source: same page's commutation framing; the
+conflict mechanics detail is INFERRED — not sourced this pass).
+
+### 2.2 Pijul: a line-graph where change identity is load-bearing
+
+Pijul's theory page models a repository as a directed graph of lines:
+vertices are lines, edges labelled by the change that introduced them read
+"according to change X, line a comes before line b" (source:
+https://pijul.org/manual/theory.html). Three design decisions matter for
+us:
+
+**Vertices are uniquely identified by (hash of introducing change, position
+in that change)** — "two lines of text with the same content, introduced
+by different changes, will be different", and a line keeps its identity
+"even if the change is applied in a totally different context" (source:
+same). The system is append-only: there are exactly two basic actions —
+adding vertices with alive edges, and mapping an existing edge label to a
+deleted one. Deletion is a labelling, not a removal (source: same).
+
+**Dependencies are the minimal context.** A change adding a vertex depends
+on the changes that introduced its surrounding lines; a change deleting a
+vertex must depend on the change that introduced it (source: same). The
+page argues edge labels cannot be dropped: without change-identity on
+edges, parallel deletions merge into one and an inverse applies to both
+incorrectly, and a deleted-up-context vs deleted-down-context asymmetry
+("zombie vertices") becomes undetectable — Alice can only tell Bob didn't
+know of her change *because* the edges carry the labels (source: same).
+
+**Pijul is a CRDT, and version identity needs cryptography-flavored
+math.** Conflicts are three graph shapes: alive vertices with no directed
+path between them, paths in opposite directions (a cycle), or zombie
+vertices; the add-vertex/map-label operations make the structure "a
+conflict-free replicated datatype" (source: same). Because commuting
+patches yield identical repos in either order, version identifiers must be
+order-independent — but naive schemes like XOR of change hashes are
+forgeable, "since the hashes are random, there is a high probability that
+any n hashes form an independent linear basis"; Pijul instead derives the
+version id by exponentiation in a group, so forging a version identity
+requires solving a discrete-log problem (source: same). Files get two
+vertices (name + inode) so directory renames commute with file renames
+(source: same). Pseudo-edges and a BLOCK edge label keep the alive
+subgraph connected and ordering/status roles distinct for performance
+(source: same).
+
+### 2.3 What breaks at scale
+
+Two honest failure records. First, the darcs family's own documentation
+admits the textual-only dependency model is the ceiling: anything requiring
+language semantics needs manual dependency annotation (source:
+Theory/Motivation). Second, the Pijul theory page itself documents how much
+machinery minimal-patch-algebra costs at the file and performance layer —
+pseudo-edges on every deletion, the BLOCK label to disambiguate ordering
+from status, a two-vertex file model to make renames commute (source:
+theory.html). The widely-cited exponential-merge blowups that pushed darcs
+from "mergers" to "conflictors" and shaped darcs-2/darcs-3 are **INFERRED
+here** — this pass fetched the motivation page, not the performance
+history; a later section pass should source them before we lean on that
+claim.
+
+**What a user gains.** True cherry-pick: any patch can be lifted to any
+context the algebra permits, with dependency closure computed, not guessed
+(source: darcs Motivation). Order-independence where it holds: two
+independent changes are the *same* change regardless of arrival order —
+the anti-Goodhart property our receipt chain lacks by design (Pijul, source
+theory.html). Conflicts as data: Pijul's conflict is a graph shape that
+survives synchronization, not a transient marker file (source: same).
+
+**What a user loses / where it bites.** Dependency blindness beyond
+textual adjacency (darcs, source). Ecosystem and interop: neither darcs
+nor Pijul speaks the git protocol natively, so every collaborator is a
+convert (INFERRED — no doc fetched this pass states it; safe from general
+knowledge, flagged per protocol). And the mental model cost is real:
+"commute", "minimal context", "zombie vertex" is a steeper onboarding than
+commit-and-push (INFERRED).
+
+**Transfer to quilt-in-git.** Three steals, in priority order:
+1. *Identity across context*: Pijul's line keeps its identity when applied
+   elsewhere; a contested dial's cascade entry could carry the *identity*
+   of the tick that set the contested value, not just the value (source:
+   theory.html's vertex-identity design; transfer INFERRED).
+2. *Version id must be non-linear*: our fnv1a-64 receipt chain is
+   order-sensitive and genesis-anchored *on purpose* — a receipt log wants
+   order-dependence, a *version name* does not. If quilt ever names
+   "current state" separately from "log tip", don't derive it by XOR/sum
+   of tick hashes; that invites the linear-forgery Pijul's discrete-log
+   scheme exists to prevent (source: theory.html; transfer INFERRED).
+3. *Minimal-context dependency queries*: wave4's `quilt-query` coverage
+   question ("which ticks does dial X actually depend on?") is exactly
+   darcs' commute-backwards computation in miniature — over dial files the
+   textual adjacency limitation mostly evaporates, because a dial file is
+   small and its whole content is the relevant region (source: darcs
+   Motivation; transfer INFERRED).
