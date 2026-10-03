@@ -1,0 +1,49 @@
+#!/bin/sh
+# quilt-adsr A D S R HOLD PEAK [t] — ADSR envelope over N=A+D+HOLD+R ticks.
+#
+#   .quilt/bin/quilt-adsr 2 2 0.5 2 4 1.0       # whole curve, one value/line
+#   .quilt/bin/quilt-adsr 2 2 0.5 2 4 1.0 5     # value at tick t
+#
+# A dial driven by attack/decay ramps (abstraction-ladder Tier-0 brick:
+# envelope = piecewise-linear function of tick index, the DAW read of a
+# quilt dial). Segments:
+#   attack  0      -> PEAK     over A ticks
+#   decay   PEAK   -> S*PEAK   over D ticks   (S = sustain LEVEL, 0..1)
+#   sustain S*PEAK            for  HOLD ticks
+#   release S*PEAK -> 0        over R ticks
+# Value is 0 outside [0, A+D+HOLD+R). Zero-length segments are skipped,
+# not errors. Invalid args are REFUSED with a reason (exit 2) — the
+# refusal policy keeps the field provable.
+set -e
+
+[ $# -ge 6 ] && [ $# -le 7 ] || { echo "usage: quilt-adsr A D S R HOLD PEAK [t]" >&2; exit 2; }
+A=$1; D=$2; S=$3; R=$4; HOLD=$5; PEAK=$6; T=${7-}
+
+awk -v A="$A" -v D="$D" -v S="$S" -v R="$R" -v H="$HOLD" -v P="$PEAK" -v T="$T" '
+function env(t) {
+  if (t < 0 || t >= total) return 0
+  if (A > 0 && t < A) return P * t / A          # attack ramp
+  t -= A
+  if (D > 0 && t < D) return P - (P - S*P) * t / D   # decay ramp
+  t -= D
+  if (t < H) return S*P                          # sustain hold
+  t -= H
+  if (R > 0 && t < R) return S*P * (1 - t / R)   # release ramp
+  return 0
+}
+BEGIN {
+  seg = "^(0|[1-9][0-9]*)$"
+  if (A !~ seg || D !~ seg || R !~ seg || H !~ seg) {
+    print "quilt-adsr: A,D,R,HOLD must be non-negative integers" > "/dev/stderr"; exit 2
+  }
+  if (S+0 < 0 || S+0 > 1) {
+    print "quilt-adsr: sustain level S must be in [0,1], got " S > "/dev/stderr"; exit 2
+  }
+  if (P+0 <= 0) { print "quilt-adsr: PEAK must be > 0" > "/dev/stderr"; exit 2 }
+  if (T != "" && T !~ seg) {
+    print "quilt-adsr: t must be a non-negative integer" > "/dev/stderr"; exit 2
+  }
+  total = A + D + H + R
+  if (T != "") { print env(T); exit }
+  for (t = 0; t < total; t++) print env(t)
+}'

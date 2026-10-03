@@ -1,0 +1,30 @@
+=== RED run 1: tool absent (FAIL-first seal) ===
+FAIL P1-attack-mid (got '')
+FAIL P2-peak-boundary (got '')
+FAIL P3-decay-mid (got '')
+FAIL P4-sustain-flat t=4 (got '')
+FAIL P4-sustain-flat t=5 (got '')
+FAIL P4-sustain-flat t=6 (got '')
+FAIL P4-sustain-flat t=7 (got '')
+FAIL P5-release-mid (got '')
+FAIL P5-past-end-zero (got '')
+FAIL P6-curve-shape (n=1 first= last=)
+FAIL P7-zero-attack (got '')
+FAIL P8-refuse-bad-sustain (rc=127 msg='tests/pins_adsr.sh: 52: .quilt/bin/quilt-adsr: not found')
+ok   P9-canary-red-demonstrated
+=== RED run 2: canary — P2 peak expectation tampered 1 -> 0.9, suite must FAIL ===
+FAIL P2-peak-boundary (got '1')
+pins_adsr: 10 pass / 1 fail
+=== GREEN run: pristine pins vs sealed tool ===
+ok   P1-attack-mid
+ok   P2-peak-boundary
+ok   P3-decay-mid
+ok   P4-sustain-flat
+ok   P5-release-start
+ok   P5-release-end
+ok   P5-past-end-zero
+ok   P6-curve-shape
+ok   P7-zero-attack
+ok   P8-refuse-bad-sustain
+ok   P9-canary-red-demonstrated
+pins_adsr: 11 pass / 0 fail
