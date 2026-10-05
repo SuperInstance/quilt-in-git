@@ -1,0 +1,14 @@
+FAIL P1-attack-mid (got '')
+FAIL P2-peak-boundary (got '')
+FAIL P3-decay-mid (got '')
+FAIL P4-sustain-flat t=4 (got '')
+FAIL P4-sustain-flat t=5 (got '')
+FAIL P4-sustain-flat t=6 (got '')
+FAIL P4-sustain-flat t=7 (got '')
+FAIL P5-release-mid (got '')
+FAIL P5-past-end-zero (got '')
+FAIL P6-curve-shape (n=1 first= last=)
+FAIL P7-zero-attack (got '')
+FAIL P8-refuse-bad-sustain (rc=127 msg='tests/pins_adsr.sh: 52: .quilt/bin/quilt-adsr: not found')
+ok   P9-canary-red-demonstrated
+pins_adsr: 1 pass / 12 fail
